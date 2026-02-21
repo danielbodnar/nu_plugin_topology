@@ -20,6 +20,13 @@ impl Plugin for TopologyPlugin {
             Box::new(commands::Sample),
             Box::new(commands::Fingerprint),
             Box::new(commands::Analyze),
+            Box::new(commands::Classify),
+            Box::new(commands::GenerateTaxonomy),
+            Box::new(commands::Tags),
+            Box::new(commands::Topics),
+            Box::new(commands::Dedup),
+            Box::new(commands::Organize),
+            Box::new(commands::Similarity),
         ]
     }
 }

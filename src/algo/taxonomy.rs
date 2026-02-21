@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// A taxonomy category with keywords for BM25 matching.
 #[derive(Debug, Clone, Serialize, Deserialize)]

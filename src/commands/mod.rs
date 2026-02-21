@@ -1,7 +1,21 @@
 mod analyze;
+mod classify;
+mod dedup;
 mod fingerprint;
+mod generate_taxonomy;
+mod organize;
 mod sample;
+mod similarity;
+mod tags;
+mod topics;
 
 pub use analyze::Analyze;
+pub use classify::Classify;
+pub use dedup::Dedup;
 pub use fingerprint::Fingerprint;
+pub use generate_taxonomy::GenerateTaxonomy;
+pub use organize::Organize;
 pub use sample::Sample;
+pub use similarity::Similarity;
+pub use tags::Tags;
+pub use topics::Topics;

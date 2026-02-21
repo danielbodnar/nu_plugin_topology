@@ -1,4 +1,3 @@
-use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 
 /// Linkage method for HAC.
