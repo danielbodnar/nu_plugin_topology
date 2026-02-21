@@ -1,11 +1,13 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, ListStream, PipelineData, Record, Signature, Signals,
-    SyntaxShape, Type, Value,
+    Category, Example, LabeledError, ListStream, PipelineData, Signature, Signals, SyntaxShape,
+    Type, Value,
 };
 
 use crate::algo::{clustering, discover, taxonomy};
 use crate::TopologyPlugin;
+
+use super::util;
 
 pub struct Classify;
 
@@ -22,7 +24,13 @@ impl PluginCommand for Classify {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::table())
+            .input_output_types(vec![
+                (Type::table(), Type::table()),
+                (Type::list(Type::Any), Type::list(Type::Any)),
+                (Type::record(), Type::list(Type::Any)),
+                (Type::String, Type::list(Type::Any)),
+                (Type::Any, Type::Any),
+            ])
             .named(
                 "field",
                 SyntaxShape::String,
@@ -75,13 +83,13 @@ impl PluginCommand for Classify {
     fn examples(&self) -> Vec<Example<'_>> {
         vec![
             Example {
-                example: r#"[[content]; ["rust memory safety"] ["python data science"] ["javascript web frontend"]] | topology classify --clusters 2"#,
-                description: "Auto-discover 2 categories from content and classify",
+                example: r#"[[content]; ["rust memory safety"] ["python data science"]] | topology classify --clusters 2"#,
+                description: "Auto-discover 2 categories from a table",
                 result: None,
             },
             Example {
-                example: r#"open data.json | topology classify --taxonomy my-categories.json"#,
-                description: "Classify using a user-provided taxonomy file",
+                example: r#"["rust programming" "web development" "data science"] | topology classify --clusters 2"#,
+                description: "Classify a list of strings",
                 result: None,
             },
         ]
@@ -113,12 +121,11 @@ impl PluginCommand for Classify {
             ))
         })?;
 
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
         if rows.is_empty() {
             return Ok(PipelineData::Value(Value::list(vec![], head), None));
         }
 
-        // Extract text from each row
         let texts: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -128,7 +135,6 @@ impl PluginCommand for Classify {
             })
             .collect();
 
-        // Get or discover taxonomy
         let tax = match taxonomy_path {
             Some(path) => taxonomy::load_taxonomy(&path)
                 .map_err(|e| LabeledError::new(e))?,
@@ -145,15 +151,13 @@ impl PluginCommand for Classify {
             }
         };
 
-        // Classify all items against the taxonomy
         let classifications = discover::classify_against_taxonomy(&texts, &tax, threshold);
 
-        // Append columns
         let results: Vec<Value> = rows
             .into_iter()
             .zip(classifications)
             .map(|(row, (category, hierarchy, confidence))| {
-                append_columns(
+                util::append_columns(
                     row,
                     &[
                         ("_category", Value::string(&category, head)),
@@ -166,25 +170,5 @@ impl PluginCommand for Classify {
             .collect();
 
         Ok(ListStream::new(results.into_iter(), head, Signals::empty()).into())
-    }
-}
-
-fn append_columns(row: Value, cols: &[(&str, Value)], span: nu_protocol::Span) -> Value {
-    match row {
-        Value::Record { val, .. } => {
-            let mut record = val.into_owned();
-            for (name, value) in cols {
-                record.push(*name, value.clone());
-            }
-            Value::record(record, span)
-        }
-        other => {
-            let mut record = Record::new();
-            record.push("value", other);
-            for (name, value) in cols {
-                record.push(*name, value.clone());
-            }
-            Value::record(record, span)
-        }
     }
 }

@@ -6,6 +6,8 @@ use nu_protocol::{
 
 use crate::TopologyPlugin;
 
+use super::util;
+
 pub struct Organize;
 
 impl PluginCommand for Organize {
@@ -21,7 +23,11 @@ impl PluginCommand for Organize {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::table())
+            .input_output_types(vec![
+                (Type::table(), Type::table()),
+                (Type::list(Type::Any), Type::list(Type::Any)),
+                (Type::Any, Type::Any),
+            ])
             .named(
                 "format",
                 SyntaxShape::String,
@@ -55,7 +61,7 @@ impl PluginCommand for Organize {
 
     fn examples(&self) -> Vec<Example<'_>> {
         vec![Example {
-            example: r#"[[id _category]; [item1 "Web Development"] [item2 "AI & ML"]] | topology organize"#,
+            example: r#"[[id _category]; [item1 "Web Dev"] [item2 "AI"]] | topology organize"#,
             description: "Generate output paths based on category",
             result: None,
         }]
@@ -82,7 +88,7 @@ impl PluginCommand for Organize {
             .unwrap_or_else(|| "id".into());
         let head = call.head;
 
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
         if rows.is_empty() {
             return Ok(PipelineData::Value(Value::list(vec![], head), None));
         }
@@ -106,7 +112,6 @@ impl PluginCommand for Organize {
                 let output_path = match format.as_str() {
                     "flat" => format!("{output_dir}/{slug_cat}--{slug_name}"),
                     "nested" => {
-                        // Use hierarchy if available
                         let hierarchy = row
                             .get_data_by_key("_hierarchy")
                             .and_then(|v| v.coerce_string().ok())
@@ -142,13 +147,7 @@ impl PluginCommand for Organize {
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())

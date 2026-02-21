@@ -10,6 +10,8 @@ use crate::algo::sampling::{
 };
 use crate::TopologyPlugin;
 
+use super::util;
+
 pub struct Sample;
 
 impl PluginCommand for Sample {
@@ -20,12 +22,16 @@ impl PluginCommand for Sample {
     }
 
     fn description(&self) -> &str {
-        "Sample rows from a table using various strategies"
+        "Sample rows from input using various strategies"
     }
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::table())
+            .input_output_types(vec![
+                (Type::table(), Type::table()),
+                (Type::list(Type::Any), Type::list(Type::Any)),
+                (Type::Any, Type::Any),
+            ])
             .named(
                 "size",
                 SyntaxShape::Int,
@@ -61,12 +67,12 @@ impl PluginCommand for Sample {
         vec![
             Example {
                 example: "[[name]; [a] [b] [c] [d] [e]] | topology sample --size 3",
-                description: "Random sample of 3 rows",
+                description: "Random sample of 3 rows from a table",
                 result: None,
             },
             Example {
-                example: "[[lang value]; [rust 1] [go 2] [rust 3] [go 4]] | topology sample --size 2 --strategy stratified --field lang",
-                description: "Stratified sample by language field",
+                example: "[a b c d e f g h] | topology sample --size 3",
+                description: "Random sample of 3 items from a list",
                 result: None,
             },
         ]
@@ -93,8 +99,7 @@ impl PluginCommand for Sample {
             ))
         })?;
 
-        // Collect all input rows
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
         let total = rows.len();
 
         if total == 0 {
@@ -111,7 +116,6 @@ impl PluginCommand for Sample {
                         .with_label("specify the field to stratify by", head)
                 })?;
 
-                // Group indices by field value
                 let mut strata: HashMap<String, Vec<usize>> = HashMap::new();
                 for (i, row) in rows.iter().enumerate() {
                     let key = row

@@ -1,7 +1,7 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, ListStream, PipelineData, Record, Signature, Signals,
-    SyntaxShape, Type, Value,
+    Category, Example, LabeledError, ListStream, PipelineData, Signature, Signals, SyntaxShape,
+    Type, Value,
 };
 use rayon::prelude::*;
 
@@ -11,6 +11,8 @@ use crate::algo::{
     tokenizer,
 };
 use crate::TopologyPlugin;
+
+use super::util;
 
 pub struct Fingerprint;
 
@@ -27,7 +29,13 @@ impl PluginCommand for Fingerprint {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::table())
+            .input_output_types(vec![
+                (Type::table(), Type::table()),
+                (Type::list(Type::Any), Type::list(Type::Any)),
+                (Type::record(), Type::record()),
+                (Type::String, Type::record()),
+                (Type::Any, Type::Any),
+            ])
             .named(
                 "field",
                 SyntaxShape::String,
@@ -54,12 +62,24 @@ impl PluginCommand for Fingerprint {
     }
 
     fn examples(&self) -> Vec<Example<'_>> {
-        vec![Example {
-            example:
-                "[[content]; [\"hello world\"] [\"hello earth\"]] | topology fingerprint",
-            description: "Compute SimHash fingerprints for content field",
-            result: None,
-        }]
+        vec![
+            Example {
+                example:
+                    "[[content]; [\"hello world\"] [\"hello earth\"]] | topology fingerprint",
+                description: "Fingerprint a table",
+                result: None,
+            },
+            Example {
+                example: "\"hello world\" | topology fingerprint",
+                description: "Fingerprint a single string",
+                result: None,
+            },
+            Example {
+                example: "[\"hello world\" \"hello earth\"] | topology fingerprint",
+                description: "Fingerprint a list of strings",
+                result: None,
+            },
+        ]
     }
 
     fn run(
@@ -75,14 +95,12 @@ impl PluginCommand for Fingerprint {
         let weighted: bool = call.has_flag("weighted")?;
         let head = call.head;
 
-        // Collect all rows
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
 
         if rows.is_empty() {
             return Ok(PipelineData::Value(Value::list(vec![], head), None));
         }
 
-        // Extract text from each row and tokenize
         let texts: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -95,7 +113,6 @@ impl PluginCommand for Fingerprint {
         let token_lists: Vec<Vec<String>> =
             texts.par_iter().map(|t| tokenizer::tokenize(t)).collect();
 
-        // If weighted, build corpus for IDF
         let fingerprints: Vec<u64> = if weighted {
             let mut corpus = Corpus::new();
             for tokens in &token_lists {
@@ -115,34 +132,15 @@ impl PluginCommand for Fingerprint {
                 .collect()
         };
 
-        // Append _fingerprint column to each row
         let result: Vec<Value> = rows
             .into_iter()
             .zip(fingerprints)
             .map(|(row, fp)| {
                 let hex = fingerprint_to_hex(fp);
-                append_column(row, "_fingerprint", Value::string(hex, head), head)
+                util::append_column(row, "_fingerprint", Value::string(hex, head), head)
             })
             .collect();
 
         Ok(ListStream::new(result.into_iter(), head, Signals::empty()).into())
-    }
-}
-
-/// Append a column to a record Value, returning a new record.
-fn append_column(row: Value, col_name: &str, col_value: Value, span: nu_protocol::Span) -> Value {
-    match row {
-        Value::Record { val, .. } => {
-            let mut record = val.into_owned();
-            record.push(col_name, col_value);
-            Value::record(record, span)
-        }
-        other => {
-            // Wrap non-record values
-            let mut record = Record::new();
-            record.push("value", other);
-            record.push(col_name, col_value);
-            Value::record(record, span)
-        }
     }
 }

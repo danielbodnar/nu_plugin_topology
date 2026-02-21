@@ -6,6 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::TopologyPlugin;
 
+use super::util;
+
 pub struct Analyze;
 
 impl PluginCommand for Analyze {
@@ -16,12 +18,17 @@ impl PluginCommand for Analyze {
     }
 
     fn description(&self) -> &str {
-        "Analyze table structure: field stats, cardinality, patterns, and data quality"
+        "Analyze input structure: field stats, cardinality, patterns, and data quality"
     }
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::record())
+            .input_output_types(vec![
+                (Type::table(), Type::record()),
+                (Type::list(Type::Any), Type::record()),
+                (Type::record(), Type::record()),
+                (Type::Any, Type::record()),
+            ])
             .category(Category::Experimental)
     }
 
@@ -30,12 +37,19 @@ impl PluginCommand for Analyze {
     }
 
     fn examples(&self) -> Vec<Example<'_>> {
-        vec![Example {
-            example:
-                "[[name lang]; [foo rust] [bar go] [baz rust]] | topology analyze",
-            description: "Analyze table structure and field statistics",
-            result: None,
-        }]
+        vec![
+            Example {
+                example:
+                    "[[name lang]; [foo rust] [bar go] [baz rust]] | topology analyze",
+                description: "Analyze a table",
+                result: None,
+            },
+            Example {
+                example: "[hello world foo bar] | topology analyze",
+                description: "Analyze a list of strings",
+                result: None,
+            },
+        ]
     }
 
     fn run(
@@ -46,7 +60,7 @@ impl PluginCommand for Analyze {
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
         let head = call.head;
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
         let total = rows.len();
 
         if total == 0 {
@@ -57,13 +71,11 @@ impl PluginCommand for Analyze {
             return Ok(PipelineData::Value(Value::record(report, head), None));
         }
 
-        // Discover columns from first row
         let columns: Vec<String> = match &rows[0] {
             Value::Record { val, .. } => val.columns().map(|c| c.to_string()).collect(),
             _ => vec!["value".into()],
         };
 
-        // Analyze each column
         let mut field_reports = Record::new();
 
         for col in &columns {
@@ -123,7 +135,6 @@ impl PluginCommand for Analyze {
                 min_len = 0;
             }
 
-            // Top 5 most common values
             let mut freq: HashMap<&str, usize> = HashMap::new();
             for v in &values {
                 *freq.entry(v.as_str()).or_insert(0) += 1;
@@ -142,7 +153,6 @@ impl PluginCommand for Analyze {
                 })
                 .collect();
 
-            // Type distribution
             let types: Vec<Value> = type_counts
                 .iter()
                 .map(|(t, c)| {

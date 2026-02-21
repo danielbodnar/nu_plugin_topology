@@ -8,6 +8,7 @@ mod sample;
 mod similarity;
 mod tags;
 mod topics;
+pub mod util;
 
 pub use analyze::Analyze;
 pub use classify::Classify;

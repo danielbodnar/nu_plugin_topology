@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 use crate::algo::{lsh, simhash, tokenizer, url_normalize};
 use crate::TopologyPlugin;
 
+use super::util;
+
 pub struct Dedup;
 
 impl PluginCommand for Dedup {
@@ -24,7 +26,11 @@ impl PluginCommand for Dedup {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::table())
+            .input_output_types(vec![
+                (Type::table(), Type::table()),
+                (Type::list(Type::Any), Type::list(Type::Any)),
+                (Type::Any, Type::Any),
+            ])
             .named(
                 "field",
                 SyntaxShape::String,
@@ -59,11 +65,18 @@ impl PluginCommand for Dedup {
     }
 
     fn examples(&self) -> Vec<Example<'_>> {
-        vec![Example {
-            example: r#"[[content url]; ["rust programming" "https://example.com"] ["rust programming language" "https://www.example.com"]] | topology dedup"#,
-            description: "Find duplicates using combined URL + content strategy",
-            result: None,
-        }]
+        vec![
+            Example {
+                example: r#"[[content]; ["hello world"] ["hello world"] ["different"]] | topology dedup --strategy fuzzy"#,
+                description: "Find content duplicates in a table",
+                result: None,
+            },
+            Example {
+                example: r#"["hello world" "hello world" "different thing"] | topology dedup --strategy fuzzy"#,
+                description: "Find duplicates in a list of strings",
+                result: None,
+            },
+        ]
     }
 
     fn run(
@@ -85,7 +98,7 @@ impl PluginCommand for Dedup {
         let threshold: u32 = call.get_flag::<i64>("threshold")?.unwrap_or(3) as u32;
         let head = call.head;
 
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
         if rows.is_empty() {
             return Ok(PipelineData::Value(Value::list(vec![], head), None));
         }
@@ -126,13 +139,11 @@ impl PluginCommand for Dedup {
                 .map(|tokens| simhash::simhash_uniform(tokens))
                 .collect();
 
-            // Build LSH index
             let mut lsh_index = lsh::SimHashLshIndex::default_64();
             for (i, &fp) in fingerprints.iter().enumerate() {
                 lsh_index.insert(i, fp);
             }
 
-            // Get candidate pairs and verify
             for (i, j) in lsh_index.candidate_pairs() {
                 if simhash::hamming_distance(fingerprints[i], fingerprints[j]) <= threshold {
                     content_pairs.insert((i, j));
@@ -140,12 +151,12 @@ impl PluginCommand for Dedup {
             }
         }
 
-        // Merge groups using union-find
+        // Union-find
         let mut parent: Vec<usize> = (0..n).collect();
 
         let find = |parent: &mut Vec<usize>, mut x: usize| -> usize {
             while parent[x] != x {
-                parent[x] = parent[parent[x]]; // path compression
+                parent[x] = parent[parent[x]];
                 x = parent[x];
             }
             x
@@ -154,45 +165,32 @@ impl PluginCommand for Dedup {
         let union = |parent: &mut Vec<usize>, a: usize, b: usize| {
             let ra = {
                 let mut x = a;
-                while parent[x] != x {
-                    parent[x] = parent[parent[x]];
-                    x = parent[x];
-                }
+                while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x]; }
                 x
             };
             let rb = {
                 let mut x = b;
-                while parent[x] != x {
-                    parent[x] = parent[parent[x]];
-                    x = parent[x];
-                }
+                while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x]; }
                 x
             };
-            if ra != rb {
-                parent[rb] = ra;
-            }
+            if ra != rb { parent[rb] = ra; }
         };
 
-        // Union from URL groups
         for members in url_groups.values() {
             for i in 1..members.len() {
                 union(&mut parent, members[0], members[i]);
             }
         }
-
-        // Union from content pairs
         for &(i, j) in &content_pairs {
             union(&mut parent, i, j);
         }
 
-        // Build final groups
         let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
         for i in 0..n {
             let root = find(&mut parent, i);
             groups.entry(root).or_default().push(i);
         }
 
-        // Assign group IDs and primary flag
         let mut group_ids = vec![0usize; n];
         let mut is_primary = vec![true; n];
         let mut group_counter = 0;
@@ -200,15 +198,12 @@ impl PluginCommand for Dedup {
         for members in groups.values() {
             let gid = group_counter;
             group_counter += 1;
-
-            // First item in group is primary
             for (idx, &member) in members.iter().enumerate() {
                 group_ids[member] = gid;
                 is_primary[member] = idx == 0;
             }
         }
 
-        // Append columns
         let results: Vec<Value> = rows
             .into_iter()
             .enumerate()

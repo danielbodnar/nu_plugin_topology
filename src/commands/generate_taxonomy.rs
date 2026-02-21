@@ -6,6 +6,8 @@ use nu_protocol::{
 use crate::algo::{clustering, tfidf, tokenizer};
 use crate::TopologyPlugin;
 
+use super::util;
+
 pub struct GenerateTaxonomy;
 
 impl PluginCommand for GenerateTaxonomy {
@@ -21,7 +23,11 @@ impl PluginCommand for GenerateTaxonomy {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::record())
+            .input_output_types(vec![
+                (Type::table(), Type::record()),
+                (Type::list(Type::Any), Type::record()),
+                (Type::Any, Type::record()),
+            ])
             .named(
                 "field",
                 SyntaxShape::String,
@@ -54,11 +60,13 @@ impl PluginCommand for GenerateTaxonomy {
     }
 
     fn examples(&self) -> Vec<Example<'_>> {
-        vec![Example {
-            example: r#"[[content]; ["rust systems fast"] ["go concurrent simple"] ["python data science"]] | topology generate --depth 2"#,
-            description: "Generate 2-cluster taxonomy",
-            result: None,
-        }]
+        vec![
+            Example {
+                example: r#"["rust systems fast" "go concurrent simple" "python data science"] | topology generate --depth 2"#,
+                description: "Generate 2-cluster taxonomy from a list of strings",
+                result: None,
+            },
+        ]
     }
 
     fn run(
@@ -84,7 +92,7 @@ impl PluginCommand for GenerateTaxonomy {
             ))
         })?;
 
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
         let n = rows.len();
 
         if n < 2 {
@@ -93,7 +101,6 @@ impl PluginCommand for GenerateTaxonomy {
             ));
         }
 
-        // Tokenize and build corpus
         let texts: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -110,20 +117,16 @@ impl PluginCommand for GenerateTaxonomy {
             corpus.add_document(tokens);
         }
 
-        // Get TF-IDF vectors
         let vectors: Vec<std::collections::HashMap<String, f64>> = (0..n)
             .map(|i| corpus.tfidf_vector(i))
             .collect();
 
-        // Compute distance matrix
         let distances = clustering::cosine_distance_matrix(&vectors);
-
-        // Run HAC
+        let k = k.min(n);
         let dendrogram = clustering::hac(&distances, n, linkage);
         let labels = clustering::cut_tree(&dendrogram, k);
 
-        // Group items by cluster and extract top terms per cluster
-        let actual_k = *labels.iter().max().unwrap_or(&0) + 1;
+        let actual_k = labels.iter().max().map(|m| m + 1).unwrap_or(0);
         let mut categories: Vec<Value> = Vec::with_capacity(actual_k);
 
         for cluster_idx in 0..actual_k {
@@ -138,7 +141,6 @@ impl PluginCommand for GenerateTaxonomy {
                 continue;
             }
 
-            // Merge TF-IDF vectors for this cluster to find representative terms
             let mut merged: std::collections::HashMap<String, f64> =
                 std::collections::HashMap::new();
             for &i in &member_indices {

@@ -6,6 +6,8 @@ use nu_protocol::{
 use crate::algo::{nmf, tfidf, tokenizer};
 use crate::TopologyPlugin;
 
+use super::util;
+
 pub struct Topics;
 
 impl PluginCommand for Topics {
@@ -21,7 +23,11 @@ impl PluginCommand for Topics {
 
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(Type::table(), Type::record())
+            .input_output_types(vec![
+                (Type::table(), Type::record()),
+                (Type::list(Type::Any), Type::record()),
+                (Type::Any, Type::record()),
+            ])
             .named(
                 "field",
                 SyntaxShape::String,
@@ -60,11 +66,13 @@ impl PluginCommand for Topics {
     }
 
     fn examples(&self) -> Vec<Example<'_>> {
-        vec![Example {
-            example: r#"[[content]; ["rust systems programming"] ["python data science"] ["javascript web browser"]] | topology topics --topics 2"#,
-            description: "Discover 2 topics from content",
-            result: None,
-        }]
+        vec![
+            Example {
+                example: r#"["rust systems" "python data science" "javascript web"] | topology topics --topics 2"#,
+                description: "Discover 2 topics from a list of strings",
+                result: None,
+            },
+        ]
     }
 
     fn run(
@@ -83,12 +91,11 @@ impl PluginCommand for Topics {
         let vocab_limit: usize = call.get_flag::<i64>("vocab")?.unwrap_or(5000) as usize;
         let head = call.head;
 
-        let rows: Vec<Value> = input.into_iter().collect();
+        let rows = util::normalize_input(input, head);
         if rows.is_empty() {
             return Err(LabeledError::new("Need at least 1 item for topic modeling"));
         }
 
-        // Build TF-IDF vectors
         let mut corpus = tfidf::Corpus::new();
         let token_lists: Vec<Vec<String>> = rows
             .iter()
@@ -109,11 +116,9 @@ impl PluginCommand for Topics {
             .map(|i| corpus.tfidf_vector(i))
             .collect();
 
-        // Run NMF
         let result = nmf::nmf(&vectors, k, max_iter, vocab_limit);
         let dominant = result.dominant_topics();
 
-        // Build output
         let topics: Vec<Value> = (0..k)
             .map(|t| {
                 let top = result.top_terms(t, top_n);
