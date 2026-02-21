@@ -1,4 +1,5 @@
 pub mod clustering;
+pub mod discover;
 pub mod lsh;
 pub mod minhash;
 pub mod nmf;

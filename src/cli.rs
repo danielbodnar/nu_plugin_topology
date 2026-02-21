@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use nu_plugin_topology::algo::{
-    lsh, sampling, simhash, string_distance, taxonomy, tfidf, tokenizer, url_normalize,
+    clustering, discover, lsh, sampling, simhash, string_distance, taxonomy, tfidf, tokenizer,
+    url_normalize,
 };
 use rayon::prelude::*;
 use serde_json::Value;
@@ -46,17 +47,26 @@ enum Commands {
         #[arg(short, long)]
         field: Option<String>,
     },
-    /// Classify items into taxonomy categories using BM25
+    /// Classify items into auto-discovered categories (or user-provided taxonomy)
     Classify {
         /// JSON field containing text to classify
         #[arg(short, long, default_value = "content")]
         field: String,
-        /// Path to taxonomy JSON file (default: built-in)
+        /// Path to taxonomy JSON file. If omitted, categories are discovered from the data
         #[arg(short, long)]
         taxonomy: Option<String>,
+        /// Number of categories to discover (default: 15)
+        #[arg(short, long, default_value_t = 15)]
+        clusters: usize,
+        /// Max items to sample for discovery
+        #[arg(long, default_value_t = 500)]
+        sample: usize,
         /// Minimum BM25 score threshold
         #[arg(long, default_value_t = 0.5)]
         threshold: f64,
+        /// Random seed
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
     },
     /// Extract top TF-IDF tags from content
     Tags {
@@ -112,8 +122,8 @@ fn main() {
             cmd_sample(size, &strategy, field.as_deref(), seed)
         }
         Commands::Analyze { field } => cmd_analyze(field.as_deref()),
-        Commands::Classify { field, taxonomy: tax, threshold } => {
-            cmd_classify(&field, tax.as_deref(), threshold)
+        Commands::Classify { field, taxonomy: tax, clusters, sample, threshold, seed } => {
+            cmd_classify(&field, tax.as_deref(), clusters, sample, threshold, seed)
         }
         Commands::Tags { field, count } => cmd_tags(&field, count),
         Commands::Dedup { field, url_field, strategy, threshold } => {
@@ -291,59 +301,40 @@ fn cmd_analyze(field: Option<&str>) {
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }
 
-fn cmd_classify(field: &str, taxonomy_path: Option<&str>, threshold: f64) {
+fn cmd_classify(field: &str, taxonomy_path: Option<&str>, clusters: usize, sample_size: usize, threshold: f64, seed: u64) {
     let rows = read_stdin_json();
     if rows.is_empty() { println!("[]"); return; }
 
+    let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
+
     let tax = match taxonomy_path {
-        Some(path) => {
-            let json = std::fs::read_to_string(path).unwrap_or_else(|e| {
-                eprintln!("Failed to read taxonomy file '{path}': {e}");
-                std::process::exit(1);
-            });
-            taxonomy::parse_taxonomy(&json).unwrap_or_else(|e| {
-                eprintln!("{e}");
-                std::process::exit(1);
-            })
+        Some(path) => taxonomy::load_taxonomy(path).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }),
+        None => {
+            let config = discover::DiscoverConfig {
+                k: clusters,
+                sample_size,
+                label_terms: 3,
+                keywords_per_cluster: 20,
+                linkage: clustering::Linkage::Ward,
+                seed,
+            };
+            discover::discover_taxonomy(&texts, &config)
         }
-        None => taxonomy::default_taxonomy(),
     };
 
-    let flat = tax.flatten();
-    let mut corpus = tfidf::Corpus::new();
-    for (_, keywords) in &flat {
-        corpus.add_document(keywords);
-    }
+    let classifications = discover::classify_against_taxonomy(&texts, &tax, threshold);
 
     let output: Vec<Value> = rows
         .into_iter()
-        .map(|mut row| {
-            let text = get_text(&row, field);
-            let tokens = tokenizer::tokenize(&text);
-
-            let mut best_score = 0.0f64;
-            let mut best_cat = String::new();
-            let mut best_path = String::new();
-
-            for (idx, (path, _)) in flat.iter().enumerate() {
-                let score = corpus.bm25_score(idx, &tokens);
-                if score > best_score {
-                    best_score = score;
-                    best_cat = path.split(" > ").last().unwrap_or(path).to_string();
-                    best_path = path.clone();
-                }
-            }
-
+        .zip(classifications)
+        .map(|(mut row, (cat, hier, conf))| {
             if let Some(obj) = row.as_object_mut() {
-                if best_score >= threshold {
-                    obj.insert("_category".into(), Value::String(best_cat));
-                    obj.insert("_hierarchy".into(), Value::String(best_path));
-                    obj.insert("_confidence".into(), serde_json::json!(best_score));
-                } else {
-                    obj.insert("_category".into(), Value::String("Uncategorized".into()));
-                    obj.insert("_hierarchy".into(), Value::String("Uncategorized".into()));
-                    obj.insert("_confidence".into(), serde_json::json!(0.0));
-                }
+                obj.insert("_category".into(), Value::String(cat));
+                obj.insert("_hierarchy".into(), Value::String(hier));
+                obj.insert("_confidence".into(), serde_json::json!(conf));
             }
             row
         })
