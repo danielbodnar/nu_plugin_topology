@@ -41,8 +41,7 @@ url = "2.5"
 siphasher = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rayon = "1.10"
-ordered-float = "4.5"
+rayon = "1.11"
 
 # Pin interprocess to 2.2.x to match nu-plugin-core 0.110.0 API
 interprocess = "=2.2.2"

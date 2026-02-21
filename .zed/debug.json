@@ -1,0 +1,199 @@
+// Project-local debug tasks for nu_plugin_topology
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+//
+// Usage: press F4 (or run "debugger: start") to pick a configuration.
+// CodeLLDB is built into Zed for Rust — no extension needed.
+//
+// Test configs use .zed/build-tests.sh as their build step. That script
+// compiles the lib test binary and creates a stable symlink at
+//   target/debug/nu_plugin_topology-tests
+// so that the "program" field below can reference a fixed path regardless of
+// the content-hash cargo appends to the real binary name.
+[
+  // ── Binaries ──────────────────────────────────────────────────────────────
+
+  {
+    // Standalone CLI binary. Reads JSON from stdin; pipe a file via shell
+    // redirection or set "stdin" below to a local JSON path for interactive
+    // debugging sessions.
+    "label": "Build & Debug: topology (CLI)",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "cargo",
+      "args": ["build", "--no-default-features", "--features", "cli"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/topology",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    // Nushell plugin binary. Speaks MsgPack over stdio; launching directly is
+    // most useful for debugging startup / handshake logic. Normal algorithm
+    // debugging is easier via the lib-test configs below.
+    "label": "Build & Debug: nu_plugin_topology (plugin)",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "cargo",
+      "args": ["build", "--features", "plugin"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology",
+    "args": [],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  // ── Test suite ────────────────────────────────────────────────────────────
+
+  {
+    // Run every lib test (78 tests across algo/) under the debugger.
+    // Set a breakpoint anywhere in src/algo/ before launching.
+    "label": "Debug: lib tests (all)",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    // Narrow to a single test by exact name. Edit the last element of "args"
+    // to match the test you want, e.g.:
+    //   "algo::simhash::tests::identical_input_same_hash"
+    "label": "Debug: single test (edit args to filter)",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::simhash::tests::identical_input_same_hash"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  // ── Per-module test targets ───────────────────────────────────────────────
+
+  {
+    "label": "Debug: algo::discover",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::discover"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    "label": "Debug: algo::clustering",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::clustering"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    "label": "Debug: algo::lsh",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::lsh"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    "label": "Debug: algo::minhash",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::minhash"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    "label": "Debug: algo::simhash",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::simhash"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    "label": "Debug: algo::tfidf",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::tfidf"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    "label": "Debug: algo::nmf",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::nmf"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+
+  {
+    "label": "Debug: algo::tokenizer",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "sourceLanguages": ["rust"],
+    "build": {
+      "command": "sh",
+      "args": [".zed/build-tests.sh"],
+    },
+    "program": "$ZED_WORKTREE_ROOT/target/debug/nu_plugin_topology-tests",
+    "args": ["--test-threads=1", "algo::tokenizer"],
+    "cwd": "$ZED_WORKTREE_ROOT",
+  },
+]
