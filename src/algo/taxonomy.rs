@@ -90,4 +90,108 @@ mod tests {
         assert_eq!(flat.len(), 3); // Alpha, Beta, Beta > Gamma
         assert!(flat.iter().any(|(p, _)| p == "Beta > Gamma"));
     }
+
+    #[test]
+    fn empty_taxonomy() {
+        let tax = Taxonomy {
+            name: "empty".into(),
+            version: "1.0".into(),
+            categories: vec![],
+        };
+        let flat = tax.flatten();
+        assert!(flat.is_empty());
+        assert!(tax.category_names().is_empty());
+    }
+
+    #[test]
+    fn single_category_no_children() {
+        let tax = Taxonomy {
+            name: "test".into(),
+            version: "1.0".into(),
+            categories: vec![Category {
+                name: "Solo".into(),
+                keywords: vec!["one".into()],
+                children: vec![],
+            }],
+        };
+        let flat = tax.flatten();
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].0, "Solo");
+        assert_eq!(flat[0].1, vec!["one".to_string()]);
+    }
+
+    #[test]
+    fn deeply_nested_children() {
+        let tax = Taxonomy {
+            name: "deep".into(),
+            version: "1.0".into(),
+            categories: vec![Category {
+                name: "L1".into(),
+                keywords: vec![],
+                children: vec![Category {
+                    name: "L2".into(),
+                    keywords: vec![],
+                    children: vec![Category {
+                        name: "L3".into(),
+                        keywords: vec!["deep".into()],
+                        children: vec![],
+                    }],
+                }],
+            }],
+        };
+        let flat = tax.flatten();
+        assert_eq!(flat.len(), 3);
+        assert_eq!(flat[2].0, "L1 > L2 > L3");
+    }
+
+    #[test]
+    fn category_names_returns_top_level_only() {
+        let tax = Taxonomy {
+            name: "test".into(),
+            version: "1.0".into(),
+            categories: vec![
+                Category { name: "A".into(), keywords: vec![], children: vec![
+                    Category { name: "A1".into(), keywords: vec![], children: vec![] },
+                ]},
+                Category { name: "B".into(), keywords: vec![], children: vec![] },
+            ],
+        };
+        let names = tax.category_names();
+        assert_eq!(names, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn parse_taxonomy_invalid_json() {
+        let result = parse_taxonomy("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_taxonomy_missing_fields() {
+        let result = parse_taxonomy(r#"{"name": "test"}"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_taxonomy_nonexistent_file() {
+        let result = load_taxonomy("/nonexistent/path/taxonomy.json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn taxonomy_serde_preserves_keywords() {
+        let tax = Taxonomy {
+            name: "test".into(),
+            version: "2.0".into(),
+            categories: vec![Category {
+                name: "Cat".into(),
+                keywords: vec!["a".into(), "b".into(), "c".into()],
+                children: vec![],
+            }],
+        };
+        let json = serde_json::to_string(&tax).unwrap();
+        let parsed = parse_taxonomy(&json).unwrap();
+        assert_eq!(parsed.categories[0].keywords, vec!["a", "b", "c"]);
+        assert_eq!(parsed.version, "2.0");
+    }
 }

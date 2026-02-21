@@ -115,4 +115,73 @@ mod tests {
         assert!(Metric::from_str("cosine").is_some());
         assert!(Metric::from_str("unknown").is_none());
     }
+
+    #[test]
+    fn metric_from_str_aliases() {
+        assert!(Metric::from_str("lev").is_some());
+        assert!(Metric::from_str("jaro_winkler").is_some());
+        assert!(Metric::from_str("jaro-winkler").is_some());
+        assert!(Metric::from_str("cos").is_some());
+    }
+
+    #[test]
+    fn metric_from_str_case_insensitive() {
+        assert!(Metric::from_str("LEVENSHTEIN").is_some());
+        assert!(Metric::from_str("Cosine").is_some());
+        assert!(Metric::from_str("JW").is_some());
+    }
+
+    #[test]
+    fn empty_strings_all_metrics() {
+        assert_eq!(similarity("", "", Metric::Levenshtein), 1.0);
+        assert_eq!(similarity("", "", Metric::JaroWinkler), 1.0);
+        assert_eq!(similarity("", "", Metric::Cosine), 1.0);
+    }
+
+    #[test]
+    fn one_empty_string() {
+        let sim = similarity("hello", "", Metric::Levenshtein);
+        assert_eq!(sim, 0.0);
+    }
+
+    #[test]
+    fn similarity_bounds() {
+        // All metrics should return values in [0, 1]
+        let pairs = [("abc", "xyz"), ("hello", "world"), ("a", "b"), ("test", "testing")];
+        for (a, b) in &pairs {
+            for metric in [Metric::Levenshtein, Metric::JaroWinkler, Metric::Cosine] {
+                let s = similarity(a, b, metric);
+                assert!(s >= 0.0 && s <= 1.0, "{a} vs {b} with {metric:?} = {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn similarity_symmetry() {
+        let a = "kitten";
+        let b = "sitting";
+        for metric in [Metric::Levenshtein, Metric::JaroWinkler, Metric::Cosine] {
+            let ab = similarity(a, b, metric);
+            let ba = similarity(b, a, metric);
+            assert!((ab - ba).abs() < 1e-10, "{metric:?} not symmetric: {ab} vs {ba}");
+        }
+    }
+
+    #[test]
+    fn cosine_single_char() {
+        // Single char strings produce no bigrams → falls back to exact match
+        let sim = similarity("a", "a", Metric::Cosine);
+        assert_eq!(sim, 1.0);
+        let sim2 = similarity("a", "b", Metric::Cosine);
+        assert_eq!(sim2, 0.0);
+    }
+
+    #[test]
+    fn all_names_contains_expected() {
+        let names = Metric::all_names();
+        assert!(names.contains(&"levenshtein"));
+        assert!(names.contains(&"jaro-winkler"));
+        assert!(names.contains(&"cosine"));
+        assert_eq!(names.len(), 3);
+    }
 }

@@ -197,4 +197,82 @@ mod tests {
         let s2 = reservoir_sample(1000, 50, 42);
         assert_eq!(s1, s2);
     }
+
+    #[test]
+    fn random_sample_no_duplicates() {
+        let s = random_sample(100, 50, 123);
+        let unique: std::collections::HashSet<usize> = s.iter().copied().collect();
+        assert_eq!(unique.len(), s.len(), "Sample should have no duplicates");
+    }
+
+    #[test]
+    fn random_sample_different_seeds() {
+        let s1 = random_sample(100, 10, 1);
+        let s2 = random_sample(100, 10, 2);
+        assert_ne!(s1, s2, "Different seeds should produce different samples");
+    }
+
+    #[test]
+    fn systematic_sample_evenly_spaced() {
+        let s = systematic_sample(100, 10, 42);
+        // Elements should be roughly evenly spaced (step ~10)
+        for w in s.windows(2) {
+            let gap = w[1] - w[0];
+            assert!(gap >= 5 && gap <= 15, "Gap should be near 10, got {gap}");
+        }
+    }
+
+    #[test]
+    fn systematic_sample_oversized() {
+        let s = systematic_sample(5, 20, 42);
+        assert_eq!(s, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn stratified_sample_oversized() {
+        let mut strata = HashMap::new();
+        strata.insert("a".into(), vec![0, 1, 2]);
+        strata.insert("b".into(), vec![3, 4]);
+        let s = stratified_sample(&strata, 100, 42);
+        assert_eq!(s.len(), 5, "Oversized sample returns all items");
+    }
+
+    #[test]
+    fn stratified_sample_single_stratum() {
+        let mut strata = HashMap::new();
+        strata.insert("only".into(), (0..20).collect());
+        let s = stratified_sample(&strata, 5, 42);
+        assert_eq!(s.len(), 5);
+    }
+
+    #[test]
+    fn reservoir_sample_oversized() {
+        let s = reservoir_sample(3, 10, 42);
+        assert_eq!(s, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn reservoir_sample_no_duplicates() {
+        let s = reservoir_sample(1000, 100, 99);
+        let unique: std::collections::HashSet<usize> = s.iter().copied().collect();
+        assert_eq!(unique.len(), s.len());
+    }
+
+    #[test]
+    fn strategy_from_str_all() {
+        assert!(Strategy::from_str("random").is_some());
+        assert!(Strategy::from_str("stratified").is_some());
+        assert!(Strategy::from_str("systematic").is_some());
+        assert!(Strategy::from_str("reservoir").is_some());
+        assert!(Strategy::from_str("RANDOM").is_some());
+        assert!(Strategy::from_str("unknown").is_none());
+    }
+
+    #[test]
+    fn random_sample_sorted() {
+        let s = random_sample(100, 20, 42);
+        for w in s.windows(2) {
+            assert!(w[0] <= w[1], "Sample should be sorted");
+        }
+    }
 }

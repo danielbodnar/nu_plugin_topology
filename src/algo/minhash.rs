@@ -119,4 +119,65 @@ mod tests {
         let s2 = mh.signature(&tokens);
         assert_eq!(s1, s2);
     }
+
+    #[test]
+    fn single_token_signature() {
+        let mh = MinHasher::new(32);
+        let tokens: Vec<String> = vec!["solo".into()];
+        let sig = mh.signature(&tokens);
+        assert_eq!(sig.len(), 32);
+        // All values should be less than u64::MAX (at least one hash landed)
+        assert!(sig.iter().all(|&v| v < u64::MAX));
+    }
+
+    #[test]
+    fn empty_tokens_signature() {
+        let mh = MinHasher::new(16);
+        let tokens: Vec<String> = vec![];
+        let sig = mh.signature(&tokens);
+        assert_eq!(sig.len(), 16);
+        // No tokens → all values remain u64::MAX
+        assert!(sig.iter().all(|&v| v == u64::MAX));
+    }
+
+    #[test]
+    fn jaccard_symmetry() {
+        let mh = MinHasher::new(128);
+        let a: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+        let b: Vec<String> = vec!["b".into(), "c".into(), "d".into()];
+        let sig_a = mh.signature(&a);
+        let sig_b = mh.signature(&b);
+        let j_ab = mh.jaccard(&sig_a, &sig_b);
+        let j_ba = mh.jaccard(&sig_b, &sig_a);
+        assert!((j_ab - j_ba).abs() < 1e-10, "Jaccard should be symmetric");
+    }
+
+    #[test]
+    fn jaccard_bounds() {
+        let mh = MinHasher::new(128);
+        let a: Vec<String> = vec!["a".into(), "b".into()];
+        let b: Vec<String> = vec!["c".into(), "d".into()];
+        let sig_a = mh.signature(&a);
+        let sig_b = mh.signature(&b);
+        let j = mh.jaccard(&sig_a, &sig_b);
+        assert!(j >= 0.0 && j <= 1.0, "Jaccard must be in [0,1], got {j}");
+    }
+
+    #[test]
+    fn default_perm_count() {
+        let mh = MinHasher::with_default_perm();
+        assert_eq!(mh.num_perm(), 128);
+    }
+
+    #[test]
+    fn superset_high_jaccard() {
+        let mh = MinHasher::new(256);
+        let a: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+        let b: Vec<String> = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        let sig_a = mh.signature(&a);
+        let sig_b = mh.signature(&b);
+        let j = mh.jaccard(&sig_a, &sig_b);
+        // True Jaccard = 3/4 = 0.75
+        assert!(j > 0.5, "Superset Jaccard should be high, got {j}");
+    }
 }

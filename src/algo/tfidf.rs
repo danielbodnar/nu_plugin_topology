@@ -175,4 +175,80 @@ mod tests {
         // First element should have highest weight
         assert!(top[0].1 >= top[1].1);
     }
+
+    #[test]
+    fn empty_corpus() {
+        let c = Corpus::new();
+        assert_eq!(c.num_docs(), 0);
+        // IDF of unknown term in empty corpus should not panic
+        let idf = c.idf("unknown");
+        assert!(idf.is_finite());
+    }
+
+    #[test]
+    fn single_document_corpus() {
+        let mut c = Corpus::new();
+        c.add_document(&["rust".into(), "rust".into(), "fast".into()]);
+        assert_eq!(c.num_docs(), 1);
+        let vec = c.tfidf_vector(0);
+        assert!(vec.contains_key("rust"));
+        assert!(vec.contains_key("fast"));
+    }
+
+    #[test]
+    fn idf_unknown_term() {
+        let c = make_corpus();
+        let idf = c.idf("nonexistent");
+        // df=0 → IDF = ln((3 - 0 + 0.5)/(0 + 0.5) + 1) = ln(8)
+        assert!(idf > 0.0);
+    }
+
+    #[test]
+    fn bm25_no_matching_terms() {
+        let c = make_corpus();
+        let query = vec!["completely".into(), "unrelated".into()];
+        let score = c.bm25_score(0, &query);
+        assert_eq!(score, 0.0);
+    }
+
+    #[test]
+    fn bm25_custom_params() {
+        // Need varying doc lengths so b parameter has effect
+        let mut c = Corpus::new();
+        c.add_document(&["rust".into(), "fast".into()]);
+        c.add_document(&["rust".into(), "safe".into(), "memory".into(), "ownership".into(), "borrow".into()]);
+        let query = vec!["rust".into()];
+        let default_score = c.bm25_score(0, &query);
+        let custom_score = c.bm25_score_params(0, &query, 2.0, 0.5);
+        // Different k1/b with varying doc lengths should produce different scores
+        assert!((default_score - custom_score).abs() > 1e-10);
+    }
+
+    #[test]
+    fn token_weights_computation() {
+        let c = make_corpus();
+        let tokens = vec!["rust".into(), "systems".into()];
+        let weights = c.token_weights(&tokens);
+        assert!(weights.contains_key("rust"));
+        assert!(weights.contains_key("systems"));
+        // "systems" is rarer so should have higher weight
+        assert!(weights["systems"] > weights["rust"]);
+    }
+
+    #[test]
+    fn top_terms_exceeding_doc_size() {
+        let c = make_corpus();
+        // Doc 0 has 3 terms, ask for 100
+        let top = c.top_terms(0, 100);
+        assert_eq!(top.len(), 3);
+    }
+
+    #[test]
+    fn tfidf_vector_sums_positive() {
+        let c = make_corpus();
+        let vec = c.tfidf_vector(0);
+        for &v in vec.values() {
+            assert!(v >= 0.0, "TF-IDF values should be non-negative");
+        }
+    }
 }

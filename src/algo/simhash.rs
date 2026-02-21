@@ -124,4 +124,90 @@ mod tests {
         assert_ne!(h_uniform, 0);
         assert_ne!(h_weighted, 0);
     }
+
+    #[test]
+    fn empty_tokens_produces_zero() {
+        let tokens: Vec<String> = vec![];
+        let h = simhash_uniform(&tokens);
+        assert_eq!(h, 0);
+    }
+
+    #[test]
+    fn single_token() {
+        let tokens: Vec<String> = vec!["rust".into()];
+        let h = simhash_uniform(&tokens);
+        assert_ne!(h, 0);
+    }
+
+    #[test]
+    fn hamming_distance_identical() {
+        assert_eq!(hamming_distance(42, 42), 0);
+    }
+
+    #[test]
+    fn hamming_distance_max() {
+        assert_eq!(hamming_distance(0, u64::MAX), 64);
+    }
+
+    #[test]
+    fn hamming_distance_one_bit() {
+        assert_eq!(hamming_distance(0b1000, 0b1001), 1);
+    }
+
+    #[test]
+    fn is_near_duplicate_threshold_zero() {
+        assert!(is_near_duplicate(42, 42, 0));
+        assert!(!is_near_duplicate(42, 43, 0));
+    }
+
+    #[test]
+    fn is_near_duplicate_high_threshold() {
+        // With threshold 64, everything is a near-duplicate
+        assert!(is_near_duplicate(0, u64::MAX, 64));
+    }
+
+    #[test]
+    fn hex_to_fingerprint_invalid() {
+        assert!(hex_to_fingerprint("not_hex").is_none());
+        assert!(hex_to_fingerprint("").is_none());
+    }
+
+    #[test]
+    fn hex_roundtrip_zero() {
+        let hex = fingerprint_to_hex(0);
+        assert_eq!(hex, "0000000000000000");
+        assert_eq!(hex_to_fingerprint(&hex), Some(0));
+    }
+
+    #[test]
+    fn hex_roundtrip_max() {
+        let hex = fingerprint_to_hex(u64::MAX);
+        assert_eq!(hex, "ffffffffffffffff");
+        assert_eq!(hex_to_fingerprint(&hex), Some(u64::MAX));
+    }
+
+    #[test]
+    fn simhash_order_independent() {
+        // SimHash on the same set of tokens in different order should produce
+        // the same or very similar result since each token contributes independently
+        let t1: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+        let t2: Vec<String> = vec!["c".into(), "a".into(), "b".into()];
+        let h1 = simhash_uniform(&t1);
+        let h2 = simhash_uniform(&t2);
+        assert_eq!(h1, h2, "SimHash should be order-independent");
+    }
+
+    #[test]
+    fn weighted_high_weight_dominates() {
+        let tokens: Vec<String> = vec!["important".into(), "noise".into()];
+        let mut weights = HashMap::new();
+        weights.insert("important".into(), 1000.0);
+        weights.insert("noise".into(), 0.001);
+        let h = simhash(&tokens, &weights);
+        // The fingerprint should be very close to hashing "important" alone
+        let solo: Vec<String> = vec!["important".into()];
+        let h_solo = simhash_uniform(&solo);
+        let dist = hamming_distance(h, h_solo);
+        assert!(dist < 10, "High-weight token should dominate, got distance {dist}");
+    }
 }

@@ -333,4 +333,107 @@ mod tests {
         // The matching text should score higher than the gibberish
         assert!(results[0].2 > results[1].2);
     }
+
+    #[test]
+    fn classify_high_threshold_returns_uncategorized() {
+        let texts = vec!["something vaguely related".into()];
+        let tax = taxonomy::Taxonomy {
+            name: "test".into(),
+            version: "1.0".into(),
+            categories: vec![taxonomy::Category {
+                name: "Rust".into(),
+                keywords: vec!["rust".into(), "systems".into()],
+                children: vec![],
+            }],
+        };
+        let results = classify_against_taxonomy(&texts, &tax, 999.0);
+        assert_eq!(results[0].0, "Uncategorized");
+        assert_eq!(results[0].2, 0.0);
+    }
+
+    #[test]
+    fn classify_empty_texts() {
+        let texts: Vec<String> = vec![];
+        let tax = taxonomy::Taxonomy {
+            name: "test".into(),
+            version: "1.0".into(),
+            categories: vec![taxonomy::Category {
+                name: "Cat".into(),
+                keywords: vec!["word".into()],
+                children: vec![],
+            }],
+        };
+        let results = classify_against_taxonomy(&texts, &tax, 0.0);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn classify_multiple_categories() {
+        let texts = vec![
+            "rust memory safety borrow ownership".into(),
+            "javascript web html css browser dom".into(),
+        ];
+        let tax = taxonomy::Taxonomy {
+            name: "test".into(),
+            version: "1.0".into(),
+            categories: vec![
+                taxonomy::Category {
+                    name: "Rust".into(),
+                    keywords: vec!["rust".into(), "memory".into(), "safety".into(), "borrow".into()],
+                    children: vec![],
+                },
+                taxonomy::Category {
+                    name: "Web".into(),
+                    keywords: vec!["javascript".into(), "web".into(), "html".into(), "css".into()],
+                    children: vec![],
+                },
+            ],
+        };
+        let results = classify_against_taxonomy(&texts, &tax, 0.0);
+        assert_eq!(results[0].0, "Rust");
+        assert_eq!(results[1].0, "Web");
+    }
+
+    #[test]
+    fn discover_config_default() {
+        let config = DiscoverConfig::default();
+        assert!(config.k > 0);
+        assert!(config.sample_size > 0);
+        assert!(config.label_terms > 0);
+        assert!(config.keywords_per_cluster > 0);
+    }
+
+    #[test]
+    fn discover_two_items() {
+        let texts = vec![
+            "alpha bravo charlie".into(),
+            "delta echo foxtrot".into(),
+        ];
+        let config = DiscoverConfig { k: 2, ..Default::default() };
+        let tax = discover_taxonomy(&texts, &config);
+        // With only 2 items, should produce 1 or 2 categories
+        assert!(!tax.categories.is_empty());
+    }
+
+    #[test]
+    fn capitalize_helper() {
+        assert_eq!(capitalize("hello"), "Hello");
+        assert_eq!(capitalize(""), "");
+        assert_eq!(capitalize("a"), "A");
+        assert_eq!(capitalize("ALREADY"), "ALREADY");
+    }
+
+    #[test]
+    fn discover_taxonomy_serializable() {
+        let texts: Vec<String> = (0..10)
+            .map(|i| format!("topic word keyword term phrase {i}"))
+            .collect();
+        let config = DiscoverConfig { k: 2, ..Default::default() };
+        let tax = discover_taxonomy(&texts, &config);
+        // Must roundtrip through JSON
+        let json = serde_json::to_string(&tax).unwrap();
+        let parsed = taxonomy::parse_taxonomy(&json).unwrap();
+        assert_eq!(parsed.categories.len(), tax.categories.len());
+        assert_eq!(parsed.name, "discovered");
+    }
 }

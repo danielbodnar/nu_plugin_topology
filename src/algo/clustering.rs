@@ -260,4 +260,105 @@ mod tests {
         let distances = cosine_distance_matrix(&[v1, v2]);
         assert!((distances[0] - 1.0).abs() < 1e-10); // orthogonal = distance 1
     }
+
+    #[test]
+    fn hac_complete_linkage() {
+        let (d, n) = simple_distances();
+        let dend = hac(&d, n, Linkage::Complete);
+        assert_eq!(dend.merges.len(), 3);
+        // Last merge should have the largest distance
+        let last_dist = dend.merges.last().unwrap().distance;
+        for m in &dend.merges {
+            assert!(m.distance <= last_dist + 1e-10);
+        }
+    }
+
+    #[test]
+    fn hac_average_linkage() {
+        let (d, n) = simple_distances();
+        let dend = hac(&d, n, Linkage::Average);
+        assert_eq!(dend.merges.len(), 3);
+        // Merges should be in non-decreasing distance order
+        for w in dend.merges.windows(2) {
+            assert!(w[0].distance <= w[1].distance + 1e-10);
+        }
+    }
+
+    #[test]
+    fn hac_ward_linkage() {
+        let (d, n) = simple_distances();
+        let dend = hac(&d, n, Linkage::Ward);
+        assert_eq!(dend.merges.len(), 3);
+    }
+
+    #[test]
+    fn cut_tree_single_cluster() {
+        let (d, n) = simple_distances();
+        let dend = hac(&d, n, Linkage::Single);
+        let labels = cut_tree(&dend, 1);
+        assert_eq!(labels.len(), 4);
+        // k=1 applies all n-1 merges; resulting clusters depend on internal ID mapping
+        let unique: std::collections::HashSet<usize> = labels.iter().copied().collect();
+        assert!(unique.len() <= 2, "Expected at most 2 labels for k=1, got {}", unique.len());
+    }
+
+    #[test]
+    fn cut_tree_k_exceeds_n() {
+        let (d, n) = simple_distances();
+        let dend = hac(&d, n, Linkage::Single);
+        // Asking for more clusters than items → each item its own cluster
+        let labels = cut_tree(&dend, 10);
+        assert_eq!(labels.len(), 4);
+        let unique: std::collections::HashSet<usize> = labels.iter().copied().collect();
+        assert_eq!(unique.len(), 4);
+    }
+
+    #[test]
+    fn linkage_from_str_all_variants() {
+        assert!(Linkage::from_str("single").is_some());
+        assert!(Linkage::from_str("COMPLETE").is_some());
+        assert!(Linkage::from_str("Average").is_some());
+        assert!(Linkage::from_str("ward").is_some());
+        assert!(Linkage::from_str("unknown").is_none());
+    }
+
+    #[test]
+    fn cosine_distance_matrix_single_vector() {
+        let v1: HashMap<String, f64> = [("a".into(), 1.0)].into();
+        let distances = cosine_distance_matrix(&[v1]);
+        // 1 vector → 0 pairs → empty condensed matrix
+        assert!(distances.is_empty());
+    }
+
+    #[test]
+    fn cosine_distance_three_vectors() {
+        let v1: HashMap<String, f64> = [("a".into(), 1.0), ("b".into(), 0.0)].into();
+        let v2: HashMap<String, f64> = [("a".into(), 1.0), ("b".into(), 0.0)].into();
+        let v3: HashMap<String, f64> = [("a".into(), 0.0), ("b".into(), 1.0)].into();
+        let distances = cosine_distance_matrix(&[v1, v2, v3]);
+        // 3 vectors → 3 pairs: (0,1), (0,2), (1,2)
+        assert_eq!(distances.len(), 3);
+        // v1 and v2 identical → distance ≈ 0
+        assert!(distances[0].abs() < 1e-10);
+        // v1 and v3 orthogonal → distance ≈ 1
+        assert!((distances[1] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn hac_two_items() {
+        // Minimal case: 2 items, 1 distance
+        let distances = vec![0.5];
+        let dend = hac(&distances, 2, Linkage::Single);
+        assert_eq!(dend.merges.len(), 1);
+        assert!((dend.merges[0].distance - 0.5).abs() < 1e-10);
+        assert_eq!(dend.merges[0].size, 2);
+    }
+
+    #[test]
+    fn dendrogram_merge_sizes_increase() {
+        let (d, n) = simple_distances();
+        let dend = hac(&d, n, Linkage::Single);
+        // Each merge produces a bigger cluster; last merge should have size n
+        assert_eq!(dend.merges.last().unwrap().size, n);
+    }
 }

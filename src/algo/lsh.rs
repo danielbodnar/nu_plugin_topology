@@ -254,4 +254,82 @@ mod tests {
         // With 16 bands of 4 bits, 2-bit difference should still share most bands
         assert!(!pairs.is_empty(), "Near-duplicates should be candidates");
     }
+
+    #[test]
+    fn lsh_empty_index() {
+        let idx = LshIndex::new(4, 2);
+        let pairs = idx.candidate_pairs();
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn lsh_single_item() {
+        let mut idx = LshIndex::new(4, 2);
+        let sig = vec![1u64, 2, 3, 4, 5, 6, 7, 8];
+        idx.insert(0, &sig);
+        let pairs = idx.candidate_pairs();
+        assert!(pairs.is_empty(), "Single item should have no pairs");
+    }
+
+    #[test]
+    fn lsh_default_128() {
+        let idx = LshIndex::default_128();
+        assert_eq!(idx.bands(), 16);
+        assert_eq!(idx.rows(), 8);
+    }
+
+    #[test]
+    fn lsh_query_non_matching() {
+        let mut idx = LshIndex::new(4, 2);
+        let sig_a = vec![1u64, 2, 3, 4, 5, 6, 7, 8];
+        idx.insert(0, &sig_a);
+        let sig_b = vec![100, 200, 300, 400, 500, 600, 700, 800];
+        let results = idx.query(&sig_b);
+        // Should not find item 0 with completely different signature
+        assert!(!results.contains(&0) || results.is_empty());
+    }
+
+    #[test]
+    fn lsh_candidate_pairs_sorted() {
+        let mut idx = LshIndex::new(4, 2);
+        let sig = vec![1u64, 2, 3, 4, 5, 6, 7, 8];
+        idx.insert(0, &sig);
+        idx.insert(1, &sig);
+        idx.insert(2, &sig);
+        let pairs = idx.candidate_pairs();
+        // Pairs should be sorted
+        for w in pairs.windows(2) {
+            assert!(w[0] <= w[1], "Pairs should be sorted");
+        }
+        // All pairs should have i < j
+        for &(i, j) in &pairs {
+            assert!(i < j);
+        }
+    }
+
+    #[test]
+    fn simhash_lsh_empty() {
+        let idx = SimHashLshIndex::default_64();
+        let pairs = idx.candidate_pairs();
+        assert!(pairs.is_empty());
+    }
+
+    #[test]
+    fn simhash_lsh_query() {
+        let mut idx = SimHashLshIndex::default_64();
+        let fp: u64 = 0xABCD1234;
+        idx.insert(0, fp);
+        let results = idx.query(fp);
+        assert!(results.contains(&0));
+    }
+
+    #[test]
+    fn simhash_lsh_far_apart() {
+        let mut idx = SimHashLshIndex::default_64();
+        idx.insert(0, 0x0000000000000000);
+        idx.insert(1, 0xFFFFFFFFFFFFFFFF);
+        let pairs = idx.candidate_pairs();
+        // Maximally different fingerprints should not share any 4-bit band
+        assert!(!pairs.contains(&(0, 1)));
+    }
 }

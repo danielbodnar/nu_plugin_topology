@@ -153,4 +153,72 @@ mod tests {
     fn empty_returns_none() {
         assert!(normalize("").is_none());
     }
+
+    #[test]
+    fn removes_all_tracking_params() {
+        let n = normalize("https://example.com/page?fbclid=abc&gclid=def&real=yes").unwrap();
+        assert_eq!(n, "https://example.com/page?real=yes");
+    }
+
+    #[test]
+    fn removes_utm_variants() {
+        let n = normalize("https://example.com?utm_source=a&utm_medium=b&utm_campaign=c&keep=1").unwrap();
+        assert_eq!(n, "https://example.com/?keep=1");
+    }
+
+    #[test]
+    fn all_params_removed_leaves_clean_url() {
+        let n = normalize("https://example.com/page?utm_source=google&fbclid=abc").unwrap();
+        assert_eq!(n, "https://example.com/page");
+    }
+
+    #[test]
+    fn preserves_non_tracking_params() {
+        let n = normalize("https://example.com/search?q=rust&page=2").unwrap();
+        assert_eq!(n, "https://example.com/search?page=2&q=rust");
+    }
+
+    #[test]
+    fn http_non_default_port_preserved() {
+        let n = normalize("https://example.com:8080/path").unwrap();
+        assert_eq!(n, "https://example.com:8080/path");
+    }
+
+    #[test]
+    fn normalize_with_multiple_trailing_slashes() {
+        let n = normalize("https://example.com/path///").unwrap();
+        assert_eq!(n, "https://example.com/path");
+    }
+
+    #[test]
+    fn canonical_key_different_schemes_same_key() {
+        let k1 = canonical_key("https://example.com/path").unwrap();
+        let k2 = canonical_key("http://example.com/path").unwrap();
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn canonical_key_empty_returns_none() {
+        assert!(canonical_key("").is_none());
+    }
+
+    #[test]
+    fn normalize_idempotent() {
+        let url = "https://www.Example.COM/Path?z=1&a=2&utm_source=x#frag";
+        let first = normalize(url).unwrap();
+        let second = normalize(&first).unwrap();
+        assert_eq!(first, second, "normalize should be idempotent");
+    }
+
+    #[test]
+    fn is_tracking_param_cases() {
+        assert!(is_tracking_param("utm_source"));
+        assert!(is_tracking_param("utm_medium"));
+        assert!(is_tracking_param("fbclid"));
+        assert!(is_tracking_param("gclid"));
+        assert!(is_tracking_param("FBCLID")); // case insensitive
+        assert!(!is_tracking_param("id"));
+        assert!(!is_tracking_param("page"));
+        assert!(!is_tracking_param("q"));
+    }
 }

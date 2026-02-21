@@ -80,4 +80,74 @@ mod tests {
         let ng = word_ngrams(&tokens, 2);
         assert_eq!(ng, vec!["rust plugin", "plugin system"]);
     }
+
+    #[test]
+    fn tokenize_empty_string() {
+        assert!(tokenize("").is_empty());
+    }
+
+    #[test]
+    fn tokenize_only_stopwords() {
+        let tokens = tokenize("the is a of to in for on with at by");
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn tokenize_unicode() {
+        let tokens = tokenize("café résumé naïve");
+        assert_eq!(tokens, vec!["café", "résumé", "naïve"]);
+    }
+
+    #[test]
+    fn tokenize_mixed_case() {
+        let tokens = tokenize("Rust PLUGIN NuShell");
+        assert_eq!(tokens, vec!["rust", "plugin", "nushell"]);
+    }
+
+    #[test]
+    fn tokenize_punctuation_stripped() {
+        let tokens = tokenize("hello, world! great.");
+        assert!(tokens.contains(&"hello".to_string()));
+        assert!(tokens.contains(&"world".to_string()));
+        assert!(tokens.contains(&"great".to_string()));
+    }
+
+    #[test]
+    fn shingles_empty_string() {
+        let s = shingles("", 3);
+        assert_eq!(s, vec![""]);
+    }
+
+    #[test]
+    fn shingles_exact_length() {
+        let s = shingles("abc", 3);
+        assert_eq!(s, vec!["abc"]);
+    }
+
+    #[test]
+    fn shingles_n_one() {
+        let s = shingles("abc", 1);
+        assert_eq!(s, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn word_ngrams_single_token() {
+        let tokens = vec!["rust".into()];
+        let ng = word_ngrams(&tokens, 2);
+        assert_eq!(ng, vec!["rust"]);
+    }
+
+    #[test]
+    fn word_ngrams_empty() {
+        let tokens: Vec<String> = vec![];
+        let ng = word_ngrams(&tokens, 2);
+        assert_eq!(ng, vec![""]);
+    }
+
+    #[test]
+    fn word_ngrams_trigrams() {
+        let tokens: Vec<String> = vec!["a".into(), "b".into(), "c".into(), "d".into()];
+        let ng = word_ngrams(&tokens, 3);
+        assert_eq!(ng, vec!["a b c", "b c d"]);
+    }
 }

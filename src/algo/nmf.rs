@@ -243,4 +243,85 @@ mod tests {
         let result = nmf(&docs, 3, 10, 100);
         assert_eq!(result.doc_topics.len(), 0);
     }
+
+    #[test]
+    fn nmf_single_document() {
+        let docs: Vec<HashMap<String, f64>> = vec![
+            [("rust".into(), 3.0), ("fast".into(), 1.0)].into(),
+        ];
+        let result = nmf(&docs, 1, 50, 100);
+        assert_eq!(result.doc_topics.len(), 1);
+        assert_eq!(result.k, 1);
+        let topics = result.dominant_topics();
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0], 0);
+    }
+
+    #[test]
+    fn nmf_k_exceeds_docs() {
+        let docs: Vec<HashMap<String, f64>> = vec![
+            [("a".into(), 1.0)].into(),
+            [("b".into(), 1.0)].into(),
+        ];
+        let result = nmf(&docs, 5, 20, 100);
+        assert_eq!(result.k, 5);
+        assert_eq!(result.doc_topics.len(), 2);
+        assert_eq!(result.topic_terms.len(), 5);
+    }
+
+    #[test]
+    fn nmf_dominant_topics_valid_range() {
+        let docs: Vec<HashMap<String, f64>> = vec![
+            [("rust".into(), 3.0), ("systems".into(), 2.0)].into(),
+            [("web".into(), 3.0), ("javascript".into(), 2.0)].into(),
+            [("data".into(), 3.0), ("science".into(), 2.0)].into(),
+        ];
+        let result = nmf(&docs, 2, 50, 100);
+        let topics = result.dominant_topics();
+        assert_eq!(topics.len(), 3);
+        for &t in &topics {
+            assert!(t < 2, "Topic index {t} out of range for k=2");
+        }
+    }
+
+    #[test]
+    fn nmf_top_terms_out_of_range_topic() {
+        let docs: Vec<HashMap<String, f64>> = vec![
+            [("a".into(), 1.0)].into(),
+        ];
+        let result = nmf(&docs, 1, 10, 100);
+        // Asking for a topic that doesn't exist
+        let top = result.top_terms(99, 5);
+        assert!(top.is_empty());
+    }
+
+    #[test]
+    fn nmf_weights_non_negative() {
+        let docs: Vec<HashMap<String, f64>> = vec![
+            [("rust".into(), 3.0), ("fast".into(), 1.0)].into(),
+            [("web".into(), 3.0), ("html".into(), 1.0)].into(),
+        ];
+        let result = nmf(&docs, 2, 100, 100);
+        // NMF guarantees non-negative factors
+        for row in &result.doc_topics {
+            for &v in row {
+                assert!(v >= 0.0, "doc_topics has negative value: {v}");
+            }
+        }
+        for row in &result.topic_terms {
+            for &v in row {
+                assert!(v >= 0.0, "topic_terms has negative value: {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn nmf_vocab_limit_trims() {
+        let docs: Vec<HashMap<String, f64>> = vec![
+            [("a".into(), 1.0), ("b".into(), 1.0), ("c".into(), 1.0),
+             ("d".into(), 1.0), ("e".into(), 1.0)].into(),
+        ];
+        let result = nmf(&docs, 1, 10, 3); // limit vocab to 3
+        assert!(result.vocabulary.len() <= 3, "Vocab should be limited to 3");
+    }
 }
