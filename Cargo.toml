@@ -1,0 +1,58 @@
+[package]
+name = "nu_plugin_topology"
+version = "0.1.0"
+edition = "2021"
+description = "Content topology, classification, and deduplication engine for Nushell"
+license = "MIT"
+
+[[bin]]
+name = "nu_plugin_topology"
+path = "src/main.rs"
+bench = false
+required-features = ["plugin"]
+
+[[bin]]
+name = "topology"
+path = "src/cli.rs"
+bench = false
+required-features = ["cli"]
+
+[lib]
+bench = false
+
+[features]
+default = ["plugin"]
+plugin = ["dep:nu-plugin", "dep:nu-protocol"]
+cli = ["dep:clap"]
+
+[dependencies]
+# Nushell plugin (optional — only for nu_plugin_topology binary)
+nu-plugin = { version = "0.110.0", optional = true }
+nu-protocol = { version = "0.110.0", features = ["plugin"], optional = true }
+
+# CLI (optional — only for topology binary)
+clap = { version = "4.5", features = ["derive"], optional = true }
+
+# Core (always included)
+unicode-segmentation = "1.12"
+regex = "1.11"
+strsim = "0.11"
+url = "2.5"
+siphasher = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rayon = "1.10"
+ordered-float = "4.5"
+
+# Pin interprocess to 2.2.x to match nu-plugin-core 0.110.0 API
+interprocess = "=2.2.2"
+
+[dev-dependencies]
+nu-plugin-test-support = "0.110.0"
+nu-cmd-lang = "0.110.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
