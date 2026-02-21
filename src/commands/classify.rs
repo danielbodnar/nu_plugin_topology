@@ -105,7 +105,7 @@ impl PluginCommand for Classify {
                 let mut best_category = String::new();
                 let mut best_path = String::new();
 
-                for (doc_idx, (path, keywords)) in flat.iter().enumerate() {
+                for (doc_idx, (path, _keywords)) in flat.iter().enumerate() {
                     let score = corpus.bm25_score(doc_idx, &tokens);
                     if score > best_score {
                         best_score = score;
