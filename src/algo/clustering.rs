@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Linkage method for HAC.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Linkage {
     /// Min distance between any pair of points in two clusters.
     Single,
@@ -26,14 +27,14 @@ impl Linkage {
 }
 
 /// Result of HAC: a dendrogram represented as merge steps.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Dendrogram {
     pub merges: Vec<Merge>,
     pub n: usize,
 }
 
 /// A single merge step in the dendrogram.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Merge {
     pub cluster_a: usize,
     pub cluster_b: usize,
@@ -311,6 +312,35 @@ mod tests {
         assert_eq!(labels.len(), 4);
         let unique: std::collections::HashSet<usize> = labels.iter().copied().collect();
         assert_eq!(unique.len(), 4);
+    }
+
+    #[test]
+    fn dendrogram_serde_roundtrip() {
+        let (d, n) = simple_distances();
+        let dend = hac(&d, n, Linkage::Ward);
+        let json = serde_json::to_string(&dend).unwrap();
+        let dend2: Dendrogram = serde_json::from_str(&json).unwrap();
+        assert_eq!(dend.n, dend2.n);
+        assert_eq!(dend.merges.len(), dend2.merges.len());
+        for (m1, m2) in dend.merges.iter().zip(dend2.merges.iter()) {
+            assert_eq!(m1.cluster_a, m2.cluster_a);
+            assert_eq!(m1.cluster_b, m2.cluster_b);
+            assert!((m1.distance - m2.distance).abs() < 1e-10);
+            assert_eq!(m1.size, m2.size);
+        }
+    }
+
+    #[test]
+    fn linkage_serde_roundtrip() {
+        for linkage in [Linkage::Single, Linkage::Complete, Linkage::Average, Linkage::Ward] {
+            let json = serde_json::to_string(&linkage).unwrap();
+            let parsed: Linkage = serde_json::from_str(&json).unwrap();
+            // Verify by converting both back to string representation
+            assert_eq!(
+                format!("{:?}", linkage),
+                format!("{:?}", parsed),
+            );
+        }
     }
 
     #[test]

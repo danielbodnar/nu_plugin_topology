@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// A corpus of documents for TF-IDF and BM25 scoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Corpus {
     /// document_id -> term -> count
     doc_terms: Vec<HashMap<String, u32>>,
@@ -241,6 +243,20 @@ mod tests {
         // Doc 0 has 3 terms, ask for 100
         let top = c.top_terms(0, 100);
         assert_eq!(top.len(), 3);
+    }
+
+    #[test]
+    fn corpus_serde_roundtrip() {
+        let c = make_corpus();
+        let json = serde_json::to_string(&c).unwrap();
+        let c2: Corpus = serde_json::from_str(&json).unwrap();
+        assert_eq!(c.num_docs(), c2.num_docs());
+        // Verify IDF values are preserved
+        assert!((c.idf("rust") - c2.idf("rust")).abs() < 1e-10);
+        assert!((c.idf("systems") - c2.idf("systems")).abs() < 1e-10);
+        // Verify BM25 scores match
+        let query = vec!["rust".into(), "systems".into()];
+        assert!((c.bm25_score(1, &query) - c2.bm25_score(1, &query)).abs() < 1e-10);
     }
 
     #[test]

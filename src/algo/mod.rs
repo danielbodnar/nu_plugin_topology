@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod clustering;
 pub mod discover;
 pub mod lsh;
