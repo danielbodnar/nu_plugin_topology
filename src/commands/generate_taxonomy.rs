@@ -52,6 +52,12 @@ impl PluginCommand for GenerateTaxonomy {
                 "Number of top terms per cluster label (default: 5)",
                 None,
             )
+            .named(
+                "cache",
+                SyntaxShape::String,
+                "Path to SQLite cache database for persistent artifact caching",
+                None,
+            )
             .category(Category::Experimental)
     }
 
@@ -84,6 +90,7 @@ impl PluginCommand for GenerateTaxonomy {
             .get_flag::<String>("linkage")?
             .unwrap_or_else(|| "ward".into());
         let top_n: usize = call.get_flag::<i64>("top-terms")?.unwrap_or(5) as usize;
+        let _cache_path: Option<String> = call.get_flag("cache")?;
         let head = call.head;
 
         let linkage = clustering::Linkage::from_str(&linkage_str).ok_or_else(|| {

@@ -31,6 +31,8 @@ pub struct FingerprintParams {
     /// Use TF-IDF weighted SimHash instead of uniform.
     #[serde(default)]
     pub weighted: bool,
+    /// Optional path to SQLite cache database for persistent artifact caching.
+    pub cache: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -56,6 +58,8 @@ pub struct AnalyzeParams {
     pub records: Vec<serde_json::Value>,
     /// Restrict analysis to a single field.
     pub field: Option<String>,
+    /// Optional path to SQLite cache database for persistent artifact caching.
+    pub cache: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -79,6 +83,8 @@ pub struct ClassifyParams {
     /// Random seed.
     #[serde(default = "default_seed")]
     pub seed: u64,
+    /// Optional path to SQLite cache database for persistent artifact caching.
+    pub cache: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -91,6 +97,8 @@ pub struct TagsParams {
     /// Number of tags per item (default: 5).
     #[serde(default = "default_tag_count")]
     pub count: usize,
+    /// Optional path to SQLite cache database for persistent artifact caching.
+    pub cache: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -109,6 +117,8 @@ pub struct DedupParams {
     /// SimHash hamming-distance threshold (default: 3).
     #[serde(default = "default_dedup_threshold")]
     pub threshold: u32,
+    /// Optional path to SQLite cache database for persistent artifact caching.
+    pub cache: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -147,6 +157,8 @@ pub struct GenerateParams {
     /// Number of top terms per cluster label (default: 5).
     #[serde(default = "default_top_terms")]
     pub top_terms: usize,
+    /// Optional path to SQLite cache database for persistent artifact caching.
+    pub cache: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -186,6 +198,20 @@ pub struct OrganizeParams {
     /// Field to use for filename (default: "id").
     #[serde(default = "default_name_field")]
     pub name_field: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CacheInfoParams {
+    /// Path to the SQLite cache database.
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CacheClearParams {
+    /// Path to the SQLite cache database.
+    pub path: String,
+    /// Artifact kind to clear: "corpus", "dendrogram", "taxonomy", "fingerprints". If omitted, clears all.
+    pub kind: Option<String>,
 }
 
 // ── Default helpers ─────────────────────────────────────────────────────────
@@ -247,7 +273,7 @@ impl TopologyMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
         let result =
-            tokio::task::spawn_blocking(move || ops::op_fingerprint(&p.records, &p.field, p.weighted))
+            tokio::task::spawn_blocking(move || ops::op_fingerprint_cached(&p.records, &p.field, p.weighted, p.cache.as_deref()))
                 .await
                 .map_err(|e| McpError::internal_error(format!("task join error: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json_text(&result))]))
@@ -275,7 +301,7 @@ impl TopologyMcp {
     async fn analyze(&self, params: Parameters<AnalyzeParams>) -> Result<CallToolResult, McpError> {
         let p = params.0;
         let result =
-            tokio::task::spawn_blocking(move || ops::op_analyze(&p.records, p.field.as_deref()))
+            tokio::task::spawn_blocking(move || ops::op_analyze_cached(&p.records, p.field.as_deref(), p.cache.as_deref()))
                 .await
                 .map_err(|e| McpError::internal_error(format!("task join error: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json_text(&result))]))
@@ -291,7 +317,7 @@ impl TopologyMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
         let result = tokio::task::spawn_blocking(move || {
-            ops::op_classify(
+            ops::op_classify_cached(
                 &p.records,
                 &p.field,
                 p.taxonomy.as_ref(),
@@ -299,6 +325,7 @@ impl TopologyMcp {
                 p.sample,
                 p.threshold,
                 p.seed,
+                p.cache.as_deref(),
             )
         })
         .await
@@ -313,7 +340,7 @@ impl TopologyMcp {
     )]
     async fn tags(&self, params: Parameters<TagsParams>) -> Result<CallToolResult, McpError> {
         let p = params.0;
-        let result = tokio::task::spawn_blocking(move || ops::op_tags(&p.records, &p.field, p.count))
+        let result = tokio::task::spawn_blocking(move || ops::op_tags_cached(&p.records, &p.field, p.count, p.cache.as_deref()))
             .await
             .map_err(|e| McpError::internal_error(format!("task join error: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json_text(&result))]))
@@ -326,7 +353,7 @@ impl TopologyMcp {
     async fn dedup(&self, params: Parameters<DedupParams>) -> Result<CallToolResult, McpError> {
         let p = params.0;
         let result = tokio::task::spawn_blocking(move || {
-            ops::op_dedup(&p.records, &p.field, &p.url_field, &p.strategy, p.threshold)
+            ops::op_dedup_cached(&p.records, &p.field, &p.url_field, &p.strategy, p.threshold, p.cache.as_deref())
         })
         .await
         .map_err(|e| McpError::internal_error(format!("task join error: {e}"), None))?;
@@ -371,7 +398,7 @@ impl TopologyMcp {
     ) -> Result<CallToolResult, McpError> {
         let p = params.0;
         let result = tokio::task::spawn_blocking(move || {
-            ops::op_generate(&p.records, &p.field, p.depth, &p.linkage, p.top_terms)
+            ops::op_generate_cached(&p.records, &p.field, p.depth, &p.linkage, p.top_terms, p.cache.as_deref())
         })
         .await
         .map_err(|e| McpError::internal_error(format!("task join error: {e}"), None))?
@@ -410,6 +437,34 @@ impl TopologyMcp {
         .map_err(|e| McpError::internal_error(format!("task join error: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json_text(&result))]))
     }
+
+    #[tool(
+        name = "cache_info",
+        description = "Show information about a topology cache database: artifact types, sizes, counts, and total database size."
+    )]
+    async fn cache_info(
+        &self,
+        params: Parameters<CacheInfoParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        let result = ops::op_cache_info(&p.path)
+            .map_err(|e| McpError::invalid_params(e, None))?;
+        Ok(CallToolResult::success(vec![Content::text(json_text(&result))]))
+    }
+
+    #[tool(
+        name = "cache_clear",
+        description = "Clear cached artifacts from a topology cache database. Optionally clear only a specific kind: corpus, dendrogram, taxonomy, or fingerprints."
+    )]
+    async fn cache_clear(
+        &self,
+        params: Parameters<CacheClearParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let p = params.0;
+        let result = ops::op_cache_clear(&p.path, p.kind.as_deref())
+            .map_err(|e| McpError::invalid_params(e, None))?;
+        Ok(CallToolResult::success(vec![Content::text(json_text(&result))]))
+    }
 }
 
 // ── ServerHandler glue ──────────────────────────────────────────────────────
@@ -419,9 +474,11 @@ impl ServerHandler for TopologyMcp {
         ServerInfo {
             instructions: Some(
                 "Content topology engine. Tools: fingerprint, sample, analyze, classify, \
-                 tags, dedup, similarity, normalize_url, generate, topics, organize. \
+                 tags, dedup, similarity, normalize_url, generate, topics, organize, \
+                 cache_info, cache_clear. \
                  Pass JSON records for bulk operations or simple strings for \
-                 similarity/normalize_url."
+                 similarity/normalize_url. Use the `cache` parameter on supported tools \
+                 to enable persistent SQLite caching."
                     .into(),
             ),
             capabilities: ServerCapabilities {

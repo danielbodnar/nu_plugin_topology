@@ -1,5 +1,7 @@
 pub mod cache;
 pub mod clustering;
+#[cfg(feature = "cache")]
+pub mod storage;
 pub mod discover;
 pub mod lsh;
 pub mod minhash;

@@ -35,6 +35,7 @@ impl Plugin for TopologyPlugin {
             Box::new(commands::Organize),
             Box::new(commands::Similarity),
             Box::new(commands::NormalizeUrl),
+            Box::new(commands::CacheCmd),
         ]
     }
 }

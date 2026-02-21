@@ -43,6 +43,8 @@ const COMMAND_NORMALIZE_URL: &str = "topology.normalize_url";
 const COMMAND_GENERATE: &str = "topology.generate";
 const COMMAND_TOPICS: &str = "topology.topics";
 const COMMAND_ORGANIZE: &str = "topology.organize";
+const COMMAND_CACHE_INFO: &str = "topology.cache_info";
+const COMMAND_CACHE_CLEAR: &str = "topology.cache_clear";
 
 const ALL_COMMANDS: &[&str] = &[
     COMMAND_FINGERPRINT,
@@ -56,6 +58,8 @@ const ALL_COMMANDS: &[&str] = &[
     COMMAND_GENERATE,
     COMMAND_TOPICS,
     COMMAND_ORGANIZE,
+    COMMAND_CACHE_INFO,
+    COMMAND_CACHE_CLEAR,
 ];
 
 // ── Server struct ───────────────────────────────────────────────────────────
@@ -134,6 +138,8 @@ impl LanguageServer for TopologyLsp {
             COMMAND_GENERATE => exec_generate(&arg),
             COMMAND_TOPICS => exec_topics(&arg),
             COMMAND_ORGANIZE => exec_organize(&arg),
+            COMMAND_CACHE_INFO => exec_cache_info(&arg),
+            COMMAND_CACHE_CLEAR => exec_cache_clear(&arg),
             _ => Err(format!("Unknown command: {cmd}")),
         };
 
@@ -197,7 +203,8 @@ fn exec_fingerprint(arg: &Value) -> Result<Value, String> {
     let rows = get_records(arg)?;
     let field = get_str(arg, "field", "content");
     let weighted = get_bool(arg, "weighted", false);
-    Ok(ops::op_fingerprint(&rows, field, weighted))
+    let cache = arg.get("cache").and_then(|v| v.as_str());
+    Ok(ops::op_fingerprint_cached(&rows, field, weighted, cache))
 }
 
 fn exec_sample(arg: &Value) -> Result<Value, String> {
@@ -212,7 +219,8 @@ fn exec_sample(arg: &Value) -> Result<Value, String> {
 fn exec_analyze(arg: &Value) -> Result<Value, String> {
     let rows = get_records(arg)?;
     let field = arg.get("field").and_then(|v| v.as_str());
-    Ok(ops::op_analyze(&rows, field))
+    let cache = arg.get("cache").and_then(|v| v.as_str());
+    Ok(ops::op_analyze_cached(&rows, field, cache))
 }
 
 fn exec_classify(arg: &Value) -> Result<Value, String> {
@@ -223,14 +231,16 @@ fn exec_classify(arg: &Value) -> Result<Value, String> {
     let threshold = get_f64(arg, "threshold", 0.5);
     let seed = get_u64(arg, "seed", 42);
     let taxonomy = arg.get("taxonomy").filter(|v| !v.is_null());
-    ops::op_classify(&rows, field, taxonomy, clusters, sample_size, threshold, seed)
+    let cache = arg.get("cache").and_then(|v| v.as_str());
+    ops::op_classify_cached(&rows, field, taxonomy, clusters, sample_size, threshold, seed, cache)
 }
 
 fn exec_tags(arg: &Value) -> Result<Value, String> {
     let rows = get_records(arg)?;
     let field = get_str(arg, "field", "content");
     let count = get_usize(arg, "count", 5);
-    Ok(ops::op_tags(&rows, field, count))
+    let cache = arg.get("cache").and_then(|v| v.as_str());
+    Ok(ops::op_tags_cached(&rows, field, count, cache))
 }
 
 fn exec_dedup(arg: &Value) -> Result<Value, String> {
@@ -243,7 +253,8 @@ fn exec_dedup(arg: &Value) -> Result<Value, String> {
         .and_then(|v| v.as_u64())
         .map(|v| v as u32)
         .unwrap_or(3);
-    Ok(ops::op_dedup(&rows, field, url_field, strategy, threshold))
+    let cache = arg.get("cache").and_then(|v| v.as_str());
+    Ok(ops::op_dedup_cached(&rows, field, url_field, strategy, threshold, cache))
 }
 
 fn exec_similarity(arg: &Value) -> Result<Value, String> {
@@ -274,7 +285,8 @@ fn exec_generate(arg: &Value) -> Result<Value, String> {
     let depth = get_usize(arg, "depth", 10);
     let linkage = get_str(arg, "linkage", "ward");
     let top_terms = get_usize(arg, "top_terms", 5);
-    ops::op_generate(&rows, field, depth, linkage, top_terms)
+    let cache = arg.get("cache").and_then(|v| v.as_str());
+    ops::op_generate_cached(&rows, field, depth, linkage, top_terms, cache)
 }
 
 fn exec_topics(arg: &Value) -> Result<Value, String> {
@@ -294,4 +306,21 @@ fn exec_organize(arg: &Value) -> Result<Value, String> {
     let category_field = get_str(arg, "category_field", "_category");
     let name_field = get_str(arg, "name_field", "id");
     Ok(ops::op_organize(&rows, format, output_dir, category_field, name_field))
+}
+
+fn exec_cache_info(arg: &Value) -> Result<Value, String> {
+    let path = arg
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required string field 'path'")?;
+    ops::op_cache_info(path)
+}
+
+fn exec_cache_clear(arg: &Value) -> Result<Value, String> {
+    let path = arg
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required string field 'path'")?;
+    let kind = arg.get("kind").and_then(|v| v.as_str());
+    ops::op_cache_clear(path, kind)
 }

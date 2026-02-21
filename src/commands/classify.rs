@@ -5,6 +5,8 @@ use nu_protocol::{
 };
 
 use crate::algo::{clustering, discover, taxonomy};
+#[cfg(feature = "cache")]
+use crate::algo::{cache, storage};
 use crate::TopologyPlugin;
 
 use super::util;
@@ -73,6 +75,12 @@ impl PluginCommand for Classify {
                 "Random seed for sampling (default: 42)",
                 None,
             )
+            .named(
+                "cache",
+                SyntaxShape::String,
+                "Path to SQLite cache database for persistent artifact caching",
+                None,
+            )
             .category(Category::Experimental)
     }
 
@@ -113,6 +121,7 @@ impl PluginCommand for Classify {
             .get_flag::<String>("linkage")?
             .unwrap_or_else(|| "ward".into());
         let seed: u64 = call.get_flag::<i64>("seed")?.unwrap_or(42) as u64;
+        let cache_path: Option<String> = call.get_flag("cache")?;
         let head = call.head;
 
         let linkage = clustering::Linkage::from_str(&linkage_str).ok_or_else(|| {
@@ -147,7 +156,7 @@ impl PluginCommand for Classify {
                     linkage,
                     seed,
                 };
-                discover::discover_taxonomy(&texts, &config)
+                resolve_taxonomy_cached(&texts, &config, cache_path.as_deref())
             }
         };
 
@@ -171,4 +180,44 @@ impl PluginCommand for Classify {
 
         Ok(ListStream::new(results.into_iter(), head, Signals::empty()).into())
     }
+}
+
+fn resolve_taxonomy_cached(
+    texts: &[String],
+    config: &discover::DiscoverConfig,
+    #[allow(unused)] cache_path: Option<&str>,
+) -> taxonomy::Taxonomy {
+    #[cfg(feature = "cache")]
+    if let Some(cp) = cache_path {
+        if let Ok(db) = storage::CacheDb::open_or_create(cp) {
+            let c_hash = cache::content_hash(texts);
+            let args = serde_json::json!({
+                "k": config.k,
+                "sample_size": config.sample_size,
+                "seed": config.seed,
+            });
+            let a_hash = cache::args_hash(&args);
+
+            if let Ok(Some((meta, payload))) =
+                db.get(cache::ArtifactKind::Taxonomy, c_hash, a_hash)
+            {
+                if cache::is_valid(&meta, c_hash, a_hash) {
+                    if let Ok(tax) =
+                        serde_json::from_slice::<taxonomy::Taxonomy>(&payload)
+                    {
+                        return tax;
+                    }
+                }
+            }
+
+            let tax = discover::discover_taxonomy(texts, config);
+            if let Ok(payload) = serde_json::to_vec(&tax) {
+                let meta = cache::CacheMeta::new(c_hash, texts.len(), a_hash);
+                let _ = db.put(cache::ArtifactKind::Taxonomy, &meta, &payload);
+            }
+            return tax;
+        }
+    }
+
+    discover::discover_taxonomy(texts, config)
 }

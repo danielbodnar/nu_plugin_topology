@@ -26,6 +26,7 @@ plugin = ["dep:nu-plugin", "dep:nu-protocol"]
 cli = ["dep:clap"]
 mcp = ["cli", "dep:rmcp", "dep:tokio", "dep:schemars"]
 lsp = ["cli", "dep:tower-lsp", "dep:tokio", "dep:schemars"]
+cache = ["dep:rusqlite"]
 
 [dependencies]
 # Nushell plugin (optional — only for nu_plugin_topology binary)
@@ -55,6 +56,9 @@ tokio = { version = "1", features = [
 # JSON Schema generation for MCP tool parameters
 schemars = { version = "1", optional = true }
 
+# SQLite cache (optional — only for --cache flag)
+rusqlite = { version = "0.33", features = ["bundled"], optional = true }
+
 # Core (always included)
 unicode-segmentation = "1.12"
 regex = "1.12.3"
@@ -71,6 +75,12 @@ interprocess = "=2.2.2"
 [dev-dependencies]
 nu-plugin-test-support = "0.110.0"
 nu-cmd-lang = "0.110.0"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "topology_bench"
+harness = false
+required-features = ["cache"]
 
 [profile.release]
 opt-level = 3

@@ -1,4 +1,5 @@
 mod analyze;
+mod cache_cmd;
 mod classify;
 mod dedup;
 mod fingerprint;
@@ -12,6 +13,7 @@ mod topics;
 pub mod util;
 
 pub use analyze::Analyze;
+pub use cache_cmd::CacheCmd;
 pub use classify::Classify;
 pub use dedup::Dedup;
 pub use fingerprint::Fingerprint;

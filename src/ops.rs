@@ -3,16 +3,23 @@
 //! Each `op_*` function is a pure, synchronous wrapper around one or more
 //! `algo` modules. Input and output are `serde_json::Value` — no dependency
 //! on rmcp, tower-lsp, clap, or nu-plugin.
+//!
+//! When the `cache` feature is enabled, functions accept an optional
+//! `cache_path` parameter. On cache hit, expensive computation is skipped.
 
 use std::collections::{HashMap, HashSet};
 
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::algo::{
     clustering, discover, lsh, nmf, sampling, simhash, string_distance, taxonomy, tfidf, tokenizer,
     url_normalize,
 };
+
+#[cfg(feature = "cache")]
+use crate::algo::{cache, storage};
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -718,4 +725,448 @@ pub fn op_organize(
         .collect();
 
     Value::Array(output)
+}
+
+// ── Cache-aware operations ──────────────────────────────────────────────────
+//
+// These functions accept an optional `cache_path`. When the `cache` feature
+// is enabled and a path is provided, they try the cache first.
+
+/// Args struct for classify cache keying (serializable for args_hash).
+#[cfg_attr(not(feature = "cache"), allow(dead_code))]
+#[derive(Serialize, Deserialize)]
+struct ClassifyArgs {
+    clusters: usize,
+    sample_size: usize,
+    seed: u64,
+}
+
+/// Args struct for fingerprint cache keying.
+#[cfg_attr(not(feature = "cache"), allow(dead_code))]
+#[derive(Serialize, Deserialize)]
+struct FingerprintArgs {
+    weighted: bool,
+}
+
+/// Analyze with optional cache. When `cache_path` is provided and the `cache`
+/// feature is enabled, builds and caches the TF-IDF corpus and fingerprints
+/// alongside the normal stats output.
+pub fn op_analyze_cached(
+    rows: &[Value],
+    field: Option<&str>,
+    cache_path: Option<&str>,
+) -> Value {
+    #[allow(unused_mut)]
+    let mut result = op_analyze(rows, field);
+
+    #[cfg(feature = "cache")]
+    if let Some(path) = cache_path {
+        if !rows.is_empty() {
+            let content_field = field.unwrap_or("content");
+            if let Ok(db) = storage::CacheDb::open_or_create(path) {
+                let texts: Vec<String> = rows.iter().map(|r| get_text(r, content_field)).collect();
+                let c_hash = cache::content_hash(&texts);
+
+                // Cache the corpus (no args dependency — always same structure)
+                let a_hash = cache::args_hash(&());
+                let token_lists: Vec<Vec<String>> =
+                    texts.iter().map(|t| tokenizer::tokenize(t)).collect();
+                let mut corpus = tfidf::Corpus::new();
+                for tokens in &token_lists {
+                    corpus.add_document(tokens);
+                }
+                if let Ok(payload) = serde_json::to_vec(&corpus) {
+                    let meta = cache::CacheMeta::new(c_hash, rows.len(), a_hash);
+                    let _ = db.put(cache::ArtifactKind::Corpus, &meta, &payload);
+                }
+
+                // Cache fingerprints (unweighted)
+                let fingerprints: Vec<u64> = token_lists
+                    .par_iter()
+                    .map(|t| simhash::simhash_uniform(t))
+                    .collect();
+                if let Ok(payload) = serde_json::to_vec(&fingerprints) {
+                    let fp_args = FingerprintArgs { weighted: false };
+                    let fp_a_hash = cache::args_hash(&fp_args);
+                    let meta = cache::CacheMeta::new(c_hash, rows.len(), fp_a_hash);
+                    let _ = db.put(cache::ArtifactKind::Fingerprints, &meta, &payload);
+                }
+
+                // Add _cache info to result
+                if let Some(obj) = result.as_object_mut() {
+                    let artifacts = db.info().unwrap_or_default();
+                    let artifact_list: Vec<Value> = artifacts
+                        .iter()
+                        .map(|a| {
+                            serde_json::json!({
+                                "kind": a.kind,
+                                "row_count": a.row_count,
+                                "payload_bytes": a.payload_bytes,
+                                "version": a.version,
+                            })
+                        })
+                        .collect();
+                    obj.insert(
+                        "_cache".into(),
+                        serde_json::json!({
+                            "path": path,
+                            "artifacts": artifact_list,
+                        }),
+                    );
+                }
+            }
+        }
+    }
+
+    let _ = cache_path; // suppress unused warning when cache feature is off
+    result
+}
+
+/// Classify with optional cache. Caches the discovered taxonomy.
+pub fn op_classify_cached(
+    rows: &[Value],
+    field: &str,
+    taxonomy_json: Option<&Value>,
+    clusters: usize,
+    sample_size: usize,
+    threshold: f64,
+    seed: u64,
+    cache_path: Option<&str>,
+) -> Result<Value, String> {
+    if rows.is_empty() {
+        return Ok(Value::Array(vec![]));
+    }
+
+    let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
+
+    let tax = match taxonomy_json {
+        Some(v) => {
+            let json_str = serde_json::to_string(v)
+                .map_err(|e| format!("Failed to serialize taxonomy: {e}"))?;
+            taxonomy::parse_taxonomy(&json_str)?
+        }
+        None => resolve_taxonomy(&texts, clusters, sample_size, seed, cache_path)?,
+    };
+
+    let classifications = discover::classify_against_taxonomy(&texts, &tax, threshold);
+
+    let output: Vec<Value> = rows
+        .iter()
+        .cloned()
+        .zip(classifications)
+        .map(|(mut row, (cat, hier, conf))| {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("_category".into(), Value::String(cat));
+                obj.insert("_hierarchy".into(), Value::String(hier));
+                obj.insert("_confidence".into(), serde_json::json!(conf));
+            }
+            row
+        })
+        .collect();
+
+    Ok(Value::Array(output))
+}
+
+/// Classify from file path with optional cache.
+pub fn op_classify_from_file_cached(
+    rows: &[Value],
+    field: &str,
+    taxonomy_path: Option<&str>,
+    clusters: usize,
+    sample_size: usize,
+    threshold: f64,
+    seed: u64,
+    cache_path: Option<&str>,
+) -> Result<Value, String> {
+    if rows.is_empty() {
+        return Ok(Value::Array(vec![]));
+    }
+
+    let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
+
+    let tax = match taxonomy_path {
+        Some(path) => taxonomy::load_taxonomy(path)?,
+        None => resolve_taxonomy(&texts, clusters, sample_size, seed, cache_path)?,
+    };
+
+    let classifications = discover::classify_against_taxonomy(&texts, &tax, threshold);
+
+    let output: Vec<Value> = rows
+        .iter()
+        .cloned()
+        .zip(classifications)
+        .map(|(mut row, (cat, hier, conf))| {
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("_category".into(), Value::String(cat));
+                obj.insert("_hierarchy".into(), Value::String(hier));
+                obj.insert("_confidence".into(), serde_json::json!(conf));
+            }
+            row
+        })
+        .collect();
+
+    Ok(Value::Array(output))
+}
+
+/// Resolve taxonomy: try cache first, then discover from scratch.
+fn resolve_taxonomy(
+    texts: &[String],
+    clusters: usize,
+    sample_size: usize,
+    seed: u64,
+    cache_path: Option<&str>,
+) -> Result<taxonomy::Taxonomy, String> {
+    let config = discover::DiscoverConfig {
+        k: clusters,
+        sample_size,
+        label_terms: 3,
+        keywords_per_cluster: 20,
+        linkage: clustering::Linkage::Ward,
+        seed,
+    };
+
+    #[cfg(feature = "cache")]
+    if let Some(path) = cache_path {
+        if let Ok(db) = storage::CacheDb::open_or_create(path) {
+            let c_hash = cache::content_hash(texts);
+            let args = ClassifyArgs { clusters, sample_size, seed };
+            let a_hash = cache::args_hash(&args);
+
+            // Try cache hit
+            if let Ok(Some((meta, payload))) =
+                db.get(cache::ArtifactKind::Taxonomy, c_hash, a_hash)
+            {
+                if cache::is_valid(&meta, c_hash, a_hash) {
+                    if let Ok(tax) = serde_json::from_slice::<taxonomy::Taxonomy>(&payload) {
+                        return Ok(tax);
+                    }
+                }
+            }
+
+            // Cache miss: discover and store
+            let tax = discover::discover_taxonomy(texts, &config);
+            if let Ok(payload) = serde_json::to_vec(&tax) {
+                let meta = cache::CacheMeta::new(c_hash, texts.len(), a_hash);
+                let _ = db.put(cache::ArtifactKind::Taxonomy, &meta, &payload);
+            }
+            return Ok(tax);
+        }
+    }
+
+    let _ = cache_path;
+    Ok(discover::discover_taxonomy(texts, &config))
+}
+
+/// Tags with optional cache (caches the corpus).
+pub fn op_tags_cached(
+    rows: &[Value],
+    field: &str,
+    count: usize,
+    cache_path: Option<&str>,
+) -> Value {
+    if rows.is_empty() {
+        return Value::Array(vec![]);
+    }
+
+    let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
+    let token_lists: Vec<Vec<String>> = texts.iter().map(|t| tokenizer::tokenize(t)).collect();
+
+    let corpus = resolve_corpus(&token_lists, &texts, cache_path);
+
+    let output: Vec<Value> = rows
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, mut row)| {
+            let top = corpus.top_terms(i, count);
+            let tags: Vec<Value> = top
+                .iter()
+                .map(|(t, _)| Value::String(t.clone()))
+                .collect();
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("_tags".into(), Value::Array(tags));
+            }
+            row
+        })
+        .collect();
+
+    Value::Array(output)
+}
+
+/// Resolve corpus: try cache first, then build from scratch.
+fn resolve_corpus(
+    token_lists: &[Vec<String>],
+    #[cfg_attr(not(feature = "cache"), allow(unused))]
+    texts: &[String],
+    cache_path: Option<&str>,
+) -> tfidf::Corpus {
+    #[cfg(feature = "cache")]
+    if let Some(path) = cache_path {
+        if let Ok(db) = storage::CacheDb::open_or_create(path) {
+            let c_hash = cache::content_hash(texts);
+            let a_hash = cache::args_hash(&());
+
+            if let Ok(Some((meta, payload))) =
+                db.get(cache::ArtifactKind::Corpus, c_hash, a_hash)
+            {
+                if cache::is_valid(&meta, c_hash, a_hash) {
+                    if let Ok(corpus) = serde_json::from_slice::<tfidf::Corpus>(&payload) {
+                        return corpus;
+                    }
+                }
+            }
+
+            // Build and cache
+            let mut corpus = tfidf::Corpus::new();
+            for tokens in token_lists {
+                corpus.add_document(tokens);
+            }
+            if let Ok(payload) = serde_json::to_vec(&corpus) {
+                let meta = cache::CacheMeta::new(c_hash, texts.len(), a_hash);
+                let _ = db.put(cache::ArtifactKind::Corpus, &meta, &payload);
+            }
+            return corpus;
+        }
+    }
+
+    let _ = cache_path;
+    let mut corpus = tfidf::Corpus::new();
+    for tokens in token_lists {
+        corpus.add_document(tokens);
+    }
+    corpus
+}
+
+/// Fingerprint with optional cache.
+pub fn op_fingerprint_cached(
+    rows: &[Value],
+    field: &str,
+    weighted: bool,
+    cache_path: Option<&str>,
+) -> Value {
+    let result = op_fingerprint(rows, field, weighted);
+
+    #[cfg(feature = "cache")]
+    if let Some(path) = cache_path {
+        if !rows.is_empty() {
+            if let Ok(db) = storage::CacheDb::open_or_create(path) {
+                let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
+                let c_hash = cache::content_hash(&texts);
+                let fp_args = FingerprintArgs { weighted };
+                let a_hash = cache::args_hash(&fp_args);
+
+                // Extract fingerprints from result for caching
+                if let Some(arr) = result.as_array() {
+                    let fps: Vec<String> = arr
+                        .iter()
+                        .filter_map(|r| {
+                            r.get("_fingerprint")
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .collect();
+                    if let Ok(payload) = serde_json::to_vec(&fps) {
+                        let meta = cache::CacheMeta::new(c_hash, rows.len(), a_hash);
+                        let _ = db.put(cache::ArtifactKind::Fingerprints, &meta, &payload);
+                    }
+                }
+            }
+        }
+    }
+
+    let _ = cache_path;
+    result
+}
+
+/// Dedup with optional cache (pass-through — dedup always recomputes).
+pub fn op_dedup_cached(
+    rows: &[Value],
+    field: &str,
+    url_field: &str,
+    strategy: &str,
+    threshold: u32,
+    cache_path: Option<&str>,
+) -> Value {
+    let _ = cache_path;
+    op_dedup(rows, field, url_field, strategy, threshold)
+}
+
+/// Generate taxonomy with optional cache (pass-through for now).
+pub fn op_generate_cached(
+    rows: &[Value],
+    field: &str,
+    depth: usize,
+    linkage_str: &str,
+    top_n: usize,
+    cache_path: Option<&str>,
+) -> Result<Value, String> {
+    let _ = cache_path;
+    op_generate(rows, field, depth, linkage_str, top_n)
+}
+
+// ── Cache management operations ─────────────────────────────────────────────
+
+/// Return info about a cache database.
+pub fn op_cache_info(#[cfg_attr(not(feature = "cache"), allow(unused))] cache_path: &str) -> Result<Value, String> {
+    #[cfg(feature = "cache")]
+    {
+        let db = storage::CacheDb::open_or_create(cache_path)?;
+        let artifacts = db.info()?;
+        let size = db.db_size_bytes()?;
+
+        let artifact_list: Vec<Value> = artifacts
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "kind": a.kind,
+                    "content_hash": a.content_hash,
+                    "args_hash": a.args_hash,
+                    "row_count": a.row_count,
+                    "version": a.version,
+                    "created_at": a.created_at,
+                    "payload_bytes": a.payload_bytes,
+                })
+            })
+            .collect();
+
+        return Ok(serde_json::json!({
+            "path": cache_path,
+            "size_bytes": size,
+            "total": artifacts.len(),
+            "artifacts": artifact_list,
+        }));
+    }
+
+    #[cfg(not(feature = "cache"))]
+    Err("Cache feature not enabled. Build with --features cache".into())
+}
+
+/// Clear artifacts from a cache database.
+pub fn op_cache_clear(
+    #[cfg_attr(not(feature = "cache"), allow(unused))] cache_path: &str,
+    #[cfg_attr(not(feature = "cache"), allow(unused))] kind: Option<&str>,
+) -> Result<Value, String> {
+    #[cfg(feature = "cache")]
+    {
+        let db = storage::CacheDb::open_or_create(cache_path)?;
+        let artifact_kind = match kind {
+            Some(k) => Some(
+                cache::ArtifactKind::from_str(k)
+                    .ok_or_else(|| format!("Unknown artifact kind '{k}'. Use: corpus, dendrogram, taxonomy, fingerprints"))?,
+            ),
+            None => None,
+        };
+        let deleted = db.invalidate(artifact_kind)?;
+        return Ok(serde_json::json!({
+            "path": cache_path,
+            "deleted": deleted,
+            "kind": kind.unwrap_or("all"),
+        }));
+    }
+
+    #[cfg(not(feature = "cache"))]
+    {
+        let _ = kind;
+        Err("Cache feature not enabled. Build with --features cache".into())
+    }
 }

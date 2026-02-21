@@ -55,6 +55,12 @@ impl PluginCommand for Dedup {
                 "SimHash hamming distance threshold (default: 3)",
                 None,
             )
+            .named(
+                "cache",
+                SyntaxShape::String,
+                "Path to SQLite cache database for persistent artifact caching",
+                None,
+            )
             .category(Category::Experimental)
     }
 
@@ -96,6 +102,7 @@ impl PluginCommand for Dedup {
             .get_flag::<String>("strategy")?
             .unwrap_or_else(|| "combined".into());
         let threshold: u32 = call.get_flag::<i64>("threshold")?.unwrap_or(3) as u32;
+        let _cache_path: Option<String> = call.get_flag("cache")?;
         let head = call.head;
 
         let rows = util::normalize_input(input, head);

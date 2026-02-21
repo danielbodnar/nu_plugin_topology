@@ -42,6 +42,12 @@ impl PluginCommand for Tags {
                 "Number of tags to extract per item (default: 5)",
                 Some('n'),
             )
+            .named(
+                "cache",
+                SyntaxShape::String,
+                "Path to SQLite cache database for persistent artifact caching",
+                None,
+            )
             .category(Category::Experimental)
     }
 
@@ -75,6 +81,7 @@ impl PluginCommand for Tags {
             .get_flag::<String>("field")?
             .unwrap_or_else(|| "content".into());
         let count: usize = call.get_flag::<i64>("count")?.unwrap_or(5) as usize;
+        let _cache_path: Option<String> = call.get_flag("cache")?;
         let head = call.head;
 
         let rows = util::normalize_input(input, head);

@@ -36,6 +36,9 @@ enum Commands {
         /// Use TF-IDF weighted SimHash
         #[arg(short, long)]
         weighted: bool,
+        /// Path to SQLite cache database for persistent artifact caching
+        #[arg(long)]
+        cache: Option<String>,
     },
     /// Sample rows from a JSON array
     Sample {
@@ -57,6 +60,9 @@ enum Commands {
         /// JSON field containing text (if single-field analysis)
         #[arg(short, long)]
         field: Option<String>,
+        /// Path to SQLite cache database for persistent artifact caching
+        #[arg(long)]
+        cache: Option<String>,
     },
     /// Classify items into auto-discovered categories (or user-provided taxonomy)
     Classify {
@@ -78,6 +84,9 @@ enum Commands {
         /// Random seed
         #[arg(long, default_value_t = 42)]
         seed: u64,
+        /// Path to SQLite cache database for persistent artifact caching
+        #[arg(long)]
+        cache: Option<String>,
     },
     /// Extract top TF-IDF tags from content
     Tags {
@@ -87,6 +96,9 @@ enum Commands {
         /// Number of tags per item
         #[arg(short = 'n', long, default_value_t = 5)]
         count: usize,
+        /// Path to SQLite cache database for persistent artifact caching
+        #[arg(long)]
+        cache: Option<String>,
     },
     /// Find duplicates using SimHash + LSH + URL normalization
     Dedup {
@@ -102,6 +114,9 @@ enum Commands {
         /// SimHash hamming distance threshold
         #[arg(long, default_value_t = 3)]
         threshold: u32,
+        /// Path to SQLite cache database for persistent artifact caching
+        #[arg(long)]
+        cache: Option<String>,
     },
     /// Compute string similarity between two strings
     Similarity {
@@ -136,6 +151,9 @@ enum Commands {
         /// Number of top terms per cluster label
         #[arg(long, default_value_t = 5)]
         top_terms: usize,
+        /// Path to SQLite cache database for persistent artifact caching
+        #[arg(long)]
+        cache: Option<String>,
     },
     /// Discover topics using NMF (Non-negative Matrix Factorization)
     Topics {
@@ -169,6 +187,17 @@ enum Commands {
         /// Field to use for filename
         #[arg(long, default_value = "id")]
         name_field: String,
+    },
+    /// Manage the persistent topology cache database
+    Cache {
+        /// Path to the SQLite cache database
+        path: String,
+        /// Clear cached artifacts instead of showing info
+        #[arg(long)]
+        clear: bool,
+        /// Artifact kind to clear: corpus, dendrogram, taxonomy, fingerprints (default: all)
+        #[arg(long)]
+        kind: Option<String>,
     },
 }
 
@@ -208,9 +237,9 @@ fn main() {
     });
 
     match command {
-        Commands::Fingerprint { field, weighted } => {
+        Commands::Fingerprint { field, weighted, cache } => {
             let rows = read_stdin_json();
-            print_json(&ops::op_fingerprint(&rows, &field, weighted));
+            print_json(&ops::op_fingerprint_cached(&rows, &field, weighted, cache.as_deref()));
         }
         Commands::Sample {
             size,
@@ -224,9 +253,9 @@ fn main() {
                 Err(e) => die(&e),
             }
         }
-        Commands::Analyze { field } => {
+        Commands::Analyze { field, cache } => {
             let rows = read_stdin_json();
-            print_json(&ops::op_analyze(&rows, field.as_deref()));
+            print_json(&ops::op_analyze_cached(&rows, field.as_deref(), cache.as_deref()));
         }
         Commands::Classify {
             field,
@@ -235,25 +264,27 @@ fn main() {
             sample,
             threshold,
             seed,
+            cache,
         } => {
             let rows = read_stdin_json();
-            match ops::op_classify_from_file(&rows, &field, tax.as_deref(), clusters, sample, threshold, seed) {
+            match ops::op_classify_from_file_cached(&rows, &field, tax.as_deref(), clusters, sample, threshold, seed, cache.as_deref()) {
                 Ok(result) => print_json(&result),
                 Err(e) => die(&e),
             }
         }
-        Commands::Tags { field, count } => {
+        Commands::Tags { field, count, cache } => {
             let rows = read_stdin_json();
-            print_json(&ops::op_tags(&rows, &field, count));
+            print_json(&ops::op_tags_cached(&rows, &field, count, cache.as_deref()));
         }
         Commands::Dedup {
             field,
             url_field,
             strategy,
             threshold,
+            cache,
         } => {
             let rows = read_stdin_json();
-            print_json(&ops::op_dedup(&rows, &field, &url_field, &strategy, threshold));
+            print_json(&ops::op_dedup_cached(&rows, &field, &url_field, &strategy, threshold, cache.as_deref()));
         }
         Commands::Similarity { a, b, metric, all } => {
             match ops::op_similarity(&a, &b, &metric, all) {
@@ -272,9 +303,10 @@ fn main() {
             depth,
             linkage,
             top_terms,
+            cache,
         } => {
             let rows = read_stdin_json();
-            match ops::op_generate(&rows, &field, depth, &linkage, top_terms) {
+            match ops::op_generate_cached(&rows, &field, depth, &linkage, top_terms, cache.as_deref()) {
                 Ok(result) => print_json(&result),
                 Err(e) => die(&e),
             }
@@ -300,6 +332,17 @@ fn main() {
         } => {
             let rows = read_stdin_json();
             print_json(&ops::op_organize(&rows, &format, &output_dir, &category_field, &name_field));
+        }
+        Commands::Cache { path, clear, kind } => {
+            let result = if clear {
+                ops::op_cache_clear(&path, kind.as_deref())
+            } else {
+                ops::op_cache_info(&path)
+            };
+            match result {
+                Ok(r) => print_json(&r),
+                Err(e) => die(&e),
+            }
         }
     }
 }

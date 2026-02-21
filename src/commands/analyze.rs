@@ -1,6 +1,6 @@
 use nu_plugin::{EngineInterface, EvaluatedCall, PluginCommand};
 use nu_protocol::{
-    Category, Example, LabeledError, PipelineData, Record, Signature, Type, Value,
+    Category, Example, LabeledError, PipelineData, Record, Signature, SyntaxShape, Type, Value,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -29,6 +29,12 @@ impl PluginCommand for Analyze {
                 (Type::record(), Type::record()),
                 (Type::Any, Type::record()),
             ])
+            .named(
+                "cache",
+                SyntaxShape::String,
+                "Path to SQLite cache database for persistent artifact caching",
+                None,
+            )
             .category(Category::Experimental)
     }
 
@@ -60,6 +66,7 @@ impl PluginCommand for Analyze {
         input: PipelineData,
     ) -> Result<PipelineData, LabeledError> {
         let head = call.head;
+        let _cache_path: Option<String> = call.get_flag("cache")?;
         let rows = util::normalize_input(input, head);
         let total = rows.len();
 

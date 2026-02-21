@@ -29,13 +29,19 @@ cargo build --release --manifest-path /workspaces/bookmarks/packages/nu_plugin_t
 
 # CLI + MCP + LSP (no Nushell deps)
 cargo build --release --manifest-path /workspaces/bookmarks/packages/nu_plugin_topology/Cargo.toml --no-default-features --features cli,mcp,lsp
+
+# All modes + persistent cache (SQLite)
+cargo build --release --manifest-path /workspaces/bookmarks/packages/nu_plugin_topology/Cargo.toml --features plugin,cli,mcp,lsp,cache
 ```
 
 ## Test Commands
 
 ```sh
-# All unit tests (163 tests across 12 algo modules)
+# All unit tests (193 tests across 13 algo modules)
 cargo test --manifest-path /workspaces/bookmarks/packages/nu_plugin_topology/Cargo.toml --lib
+
+# Tests with cache feature enabled
+cargo test --manifest-path /workspaces/bookmarks/packages/nu_plugin_topology/Cargo.toml --lib --features cache
 
 # Single module
 cargo test --manifest-path /workspaces/bookmarks/packages/nu_plugin_topology/Cargo.toml --lib algo::discover
@@ -82,8 +88,46 @@ Must re-run both commands after every rebuild.
 | `cli` | `clap` | — | Standalone JSON CLI |
 | `mcp` | `rmcp`, `tokio`, `schemars` | `cli` | `--mcp` flag on the `topology` binary |
 | `lsp` | `tower-lsp`, `tokio`, `schemars` | `cli` | `--lsp` flag on the `topology` binary |
+| `cache` | `rusqlite` (bundled) | — | SQLite persistent caching for expensive artifacts |
 
 Both `mcp` and `lsp` extend `cli` because they share the `topology` binary entry point (`src/cli.rs`).
+
+### Persistent Cache (`--cache` flag)
+
+When built with `--features cache`, commands accept `--cache <path>` to store and retrieve expensive intermediate artifacts in a SQLite database. This is inspired by qsv's layered caching architecture.
+
+**Cache flow:**
+```
+analyze --cache data.db     ← builds corpus + fingerprints + stats
+    ↓
+classify --cache data.db    ← reuses corpus, discovers & caches taxonomy
+    ↓
+tags --cache data.db        ← reuses cached corpus
+    ↓
+dedup --cache data.db       ← reuses cached fingerprints
+```
+
+**Cache invalidation** uses a triple-signal pattern:
+- Content hash (SimHash of concatenated input texts)
+- Args hash (SipHash of serialized command parameters)
+- Version stamp (crate version)
+
+**Cache management:**
+```nushell
+topology cache data.topology.db              # Show cache info
+topology cache data.topology.db --clear      # Clear all artifacts
+topology cache data.topology.db --clear --kind taxonomy  # Clear specific kind
+```
+
+**Artifact kinds:** `corpus`, `dendrogram`, `taxonomy`, `fingerprints`
+
+**Without `--cache`**, behavior is identical to pre-cache versions (zero breaking changes).
+
+**Architecture:**
+- `src/algo/cache.rs` — types (`ArtifactKind`, `CacheMeta`) + hashing functions
+- `src/algo/storage.rs` — SQLite backend (`CacheDb`) with WAL mode, feature-gated
+- `src/ops.rs` — `op_*_cached()` functions that wrap cache logic around algo calls
+- `src/commands/cache_cmd.rs` — `topology cache` plugin command
 
 ### Source tree
 
@@ -92,9 +136,11 @@ src/
 ├── main.rs          # plugin entry: serve_plugin(&TopologyPlugin, MsgPackSerializer)
 ├── cli.rs           # standalone entry: clap CLI + --mcp/--lsp dispatch
 ├── lib.rs           # TopologyPlugin struct (cfg plugin), re-exports algo/, mcp, lsp
-├── mcp.rs           # MCP server (cfg mcp): rmcp tool_router, 11 tools, stdio transport
-├── lsp.rs           # LSP server (cfg lsp): tower-lsp, 11 workspace/executeCommand, stdio
+├── mcp.rs           # MCP server (cfg mcp): rmcp tool_router, 13 tools, stdio transport
+├── lsp.rs           # LSP server (cfg lsp): tower-lsp, 13 workspace/executeCommand, stdio
 ├── algo/            # Pure algorithms — no nu-plugin, clap, rmcp, or tower-lsp deps
+│   ├── cache            # Cache types (ArtifactKind, CacheMeta) + hashing
+│   ├── storage          # SQLite backend (CacheDb) — feature-gated "cache"
 │   ├── tokenizer        # Unicode word segmentation, stopword filter, n-grams
 │   ├── tfidf            # Corpus with TF-IDF vectors + BM25 scoring
 │   ├── simhash          # 64-bit SimHash fingerprinting (SipHash + weighted bits)
@@ -118,26 +164,28 @@ src/
     ├── topics           # topology topics
     ├── dedup            # topology dedup
     ├── organize         # topology organize
-    └── similarity       # topology similarity
+    ├── similarity       # topology similarity
+    └── cache_cmd        # topology cache (manage cache database)
 ```
 
 ### Command surface area
 
-All commands are available across all interfaces. The plugin has 10 commands (no `normalize-url`); CLI, MCP, and LSP each expose 11 commands (no plugin-specific `topology` prefix needed).
+All commands are available across all interfaces. The plugin has 12 commands; CLI, MCP, and LSP each expose 14 commands. Commands marked with `$` accept `--cache <path>` when built with the `cache` feature.
 
-| Command | Plugin | CLI | MCP | LSP |
-|---------|--------|-----|-----|-----|
-| `sample` | ✓ | ✓ | ✓ | ✓ |
-| `fingerprint` | ✓ | ✓ | ✓ | ✓ |
-| `analyze` | ✓ | ✓ | ✓ | ✓ |
-| `classify` | ✓ | ✓ | ✓ | ✓ |
-| `tags` | ✓ | ✓ | ✓ | ✓ |
-| `dedup` | ✓ | ✓ | ✓ | ✓ |
-| `similarity` | ✓ | ✓ | ✓ | ✓ |
-| `normalize-url` | — | ✓ | ✓ | ✓ |
-| `generate` | ✓ | ✓ | ✓ | ✓ |
-| `topics` | ✓ | ✓ | ✓ | ✓ |
-| `organize` | ✓ | ✓ | ✓ | ✓ |
+| Command | Plugin | CLI | MCP | LSP | Cache |
+|---------|--------|-----|-----|-----|-------|
+| `sample` | ✓ | ✓ | ✓ | ✓ | — |
+| `fingerprint` | ✓ | ✓ | ✓ | ✓ | $ |
+| `analyze` | ✓ | ✓ | ✓ | ✓ | $ |
+| `classify` | ✓ | ✓ | ✓ | ✓ | $ |
+| `tags` | ✓ | ✓ | ✓ | ✓ | $ |
+| `dedup` | ✓ | ✓ | ✓ | ✓ | $ |
+| `similarity` | ✓ | ✓ | ✓ | ✓ | — |
+| `normalize-url` | — | ✓ | ✓ | ✓ | — |
+| `generate` | ✓ | ✓ | ✓ | ✓ | $ |
+| `topics` | ✓ | ✓ | ✓ | ✓ | — |
+| `organize` | ✓ | ✓ | ✓ | ✓ | — |
+| `cache` | ✓ | ✓ | ✓ | ✓ | — |
 
 ### MCP server (`src/mcp.rs`)
 
@@ -150,7 +198,7 @@ Uses `rmcp` with `#[tool_router]` + `#[tool]` macros. Each tool maps 1:1 with a 
 
 Uses `tower-lsp` with `workspace/executeCommand`. Each command is prefixed `topology.` (e.g., `topology.fingerprint`):
 - Commands accept a single JSON object argument with operation-specific fields
-- All 8 commands are registered via `ExecuteCommandOptions` in `initialize`
+- All 13 commands are registered via `ExecuteCommandOptions` in `initialize`
 - `serve_stdio()` is the entry point, called from `cli.rs` when `--lsp` is passed
 
 ### Input normalization
@@ -189,15 +237,16 @@ Every command that processes text reads from the `--field` flag (default `conten
 | Command | Input | Adds Columns | Key Flags |
 |---------|-------|-------------|-----------|
 | `topology sample` | any | — (subsets rows) | `--size`, `--strategy`, `--field`, `--seed` |
-| `topology fingerprint` | any | `_fingerprint` | `--field`, `--weighted` |
-| `topology analyze` | any | — (returns report record) | — |
-| `topology classify` | any | `_category`, `_hierarchy`, `_confidence` | `--field`, `--clusters`, `--taxonomy`, `--threshold`, `--linkage` |
-| `topology generate` | any | — (returns taxonomy record) | `--field`, `--depth`, `--linkage`, `--top-terms` |
-| `topology tags` | any | `_tags` | `--field`, `--count` |
+| `topology fingerprint` | any | `_fingerprint` | `--field`, `--weighted`, `--cache` |
+| `topology analyze` | any | — (returns report record) | `--cache` |
+| `topology classify` | any | `_category`, `_hierarchy`, `_confidence` | `--field`, `--clusters`, `--taxonomy`, `--threshold`, `--linkage`, `--cache` |
+| `topology generate` | any | — (returns taxonomy record) | `--field`, `--depth`, `--linkage`, `--top-terms`, `--cache` |
+| `topology tags` | any | `_tags` | `--field`, `--count`, `--cache` |
 | `topology topics` | any | — (returns topics record) | `--field`, `--topics`, `--terms`, `--iterations` |
-| `topology dedup` | any | `_dup_group`, `_is_primary` | `--field`, `--url-field`, `--strategy`, `--threshold` |
+| `topology dedup` | any | `_dup_group`, `_is_primary` | `--field`, `--url-field`, `--strategy`, `--threshold`, `--cache` |
 | `topology organize` | any | `_output_path` | `--format`, `--output-dir`, `--category-field` |
 | `topology similarity` | positional args | — (returns record) | `--metric`, `--all` |
+| `topology cache` | path (positional) | — (returns record) | `--clear`, `--kind` |
 
 ## Scripts
 
@@ -214,6 +263,9 @@ Usage:
 ```nushell
 # GitHub stars
 nu scripts/stars.nu --dry-run --clusters 5
+
+# GitHub stars with persistent cache (second run is near-instant)
+nu scripts/stars.nu --dry-run --clusters 15 --cache ./output/stars.topology.db
 
 # Chrome bookmarks
 nu scripts/bookmarks.nu --dry-run --clusters 20
@@ -235,6 +287,9 @@ open --raw ~/.config/bookmarks/gh-stars.raw.json | from json | each {|r|
   {content: $"($r.full_name? | default '') ($r.description? | default '') ($topics) ($r.language? | default '')",
    url: ($r.html_url? | default ''), id: ($r.full_name? | default '')}
 } | topology classify --clusters 15
+
+# With persistent cache (second run is near-instant):
+} | topology classify --clusters 15 --cache ./output/stars.topology.db
 ```
 
 ## How to Add a New Algorithm
@@ -253,10 +308,26 @@ A new command must be wired into up to 4 places (depending on which interfaces s
 3. **MCP** (`src/mcp.rs`): Add a `<Name>Params` struct deriving `JsonSchema`. Add a `#[tool]` method on `TopologyMcp`. Add a `do_<name>()` pure function.
 4. **LSP** (`src/lsp.rs`): Add a `COMMAND_<NAME>` constant to `ALL_COMMANDS`. Add a match arm in `execute_command()` dispatching to an `exec_<name>()` function.
 
+## Benchmarks
+
+Run benchmarks with criterion (requires `cache` feature):
+
+```sh
+cargo bench --manifest-path /workspaces/bookmarks/packages/nu_plugin_topology/Cargo.toml --features cache
+```
+
+Benchmarks in `benches/topology_bench.rs`:
+- `tokenize/single` — single text tokenization
+- `simhash/1000_items` — fingerprinting at 1k scale
+- `corpus_build/{100,1000,5000}` — TF-IDF corpus construction
+- `lsh_index/5000_insert_query` — LSH insert + candidate pairs
+- `distance_matrix/{50,100,200}` — cosine distance matrix
+- `hac/{50,100,200}` — HAC clustering + dendrogram cutting
+- `discover_taxonomy/{100,500}` — full discovery pipeline
+
 ## Remaining Work
 
 - Integration tests in `tests/` using `nu-plugin-test-support`
-- Benchmarks in `benches/` (fingerprint + dedup at 20k scale)
-- SQLite persistent cache in `src/storage/` (rusqlite with FTS5, behind `sqlite` feature flag)
 - Documentation site in `docs/` (Astro Starlight)
 - Cloudflare Workers AI embeddings endpoint
+- FTS5 full-text search in cache database

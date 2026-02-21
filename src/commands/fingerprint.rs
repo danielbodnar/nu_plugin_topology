@@ -47,6 +47,12 @@ impl PluginCommand for Fingerprint {
                 "Use TF-IDF weighted SimHash (slower, more accurate)",
                 Some('w'),
             )
+            .named(
+                "cache",
+                SyntaxShape::String,
+                "Path to SQLite cache database for persistent artifact caching",
+                None,
+            )
             .category(Category::Experimental)
     }
 
@@ -93,6 +99,7 @@ impl PluginCommand for Fingerprint {
             .get_flag::<String>("field")?
             .unwrap_or_else(|| "content".into());
         let weighted: bool = call.has_flag("weighted")?;
+        let _cache_path: Option<String> = call.get_flag("cache")?;
         let head = call.head;
 
         let rows = util::normalize_input(input, head);

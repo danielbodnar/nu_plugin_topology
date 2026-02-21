@@ -35,11 +35,20 @@ def run-pipeline [
     --tags-count: int = 5
     --format: string = folders
     --output-dir: path = ./output/directory
+    --cache: string = ""
 ]: list<record> -> list<record> {
     log info $"Classifying into ($clusters) categories..."
-    let classified = ($in | topology classify --clusters $clusters)
+    let classified = if $cache != "" {
+        ($in | topology classify --clusters $clusters --cache $cache)
+    } else {
+        ($in | topology classify --clusters $clusters)
+    }
     log info $"Extracting top ($tags_count) tags per item..."
-    let tagged = ($classified | topology tags --count $tags_count)
+    let tagged = if $cache != "" {
+        ($classified | topology tags --count $tags_count --cache $cache)
+    } else {
+        ($classified | topology tags --count $tags_count)
+    }
     log info "Generating output paths..."
     $tagged | topology organize --format $format --output-dir ($output_dir | path expand)
 }
@@ -141,6 +150,7 @@ def main [
     --format: string = folders                       # Organization format: folders, flat, nested
     --dry-run                                        # Skip directory creation
     --exclude-pattern: string = ""                   # Pattern to exclude from scan
+    --cache: string = ""                             # Path to SQLite cache database
 ] {
     let dir_path = ($directory | path expand)
     if not ($dir_path | path exists) {
@@ -161,6 +171,6 @@ def main [
     let items = ($files | normalize-files $dir_path)
 
     $items
-        | run-pipeline --clusters $clusters --tags-count $tags_count --format $format --output-dir $output_dir
+        | run-pipeline --clusters $clusters --tags-count $tags_count --format $format --output-dir $output_dir --cache $cache
         | save-and-summarize $output_dir --dry-run=$dry_run
 }
