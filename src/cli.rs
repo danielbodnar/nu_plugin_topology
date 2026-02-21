@@ -9,10 +9,26 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, Read};
 
 #[derive(Parser)]
-#[command(name = "topology", version, about = "Content topology, classification, and deduplication engine")]
+#[command(
+    name = "topology",
+    version,
+    about = "Content topology, classification, and deduplication engine"
+)]
 struct Cli {
+    /// Start as an MCP (Model Context Protocol) server on stdio.
+    /// AI assistants (Claude Desktop, Cursor, etc.) connect via JSON-RPC.
+    #[cfg(feature = "mcp")]
+    #[arg(long, exclusive = true)]
+    mcp: bool,
+
+    /// Start as an LSP (Language Server Protocol) server on stdio.
+    /// Editors (VS Code, Zed, Neovim, etc.) connect via JSON-RPC.
+    #[cfg(feature = "lsp")]
+    #[arg(long, exclusive = true)]
+    lsp: bool,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -116,19 +132,62 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
+    // ── MCP server mode ─────────────────────────────────────────────────
+    #[cfg(feature = "mcp")]
+    if cli.mcp {
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(async {
+            if let Err(e) = nu_plugin_topology::mcp::serve_stdio().await {
+                eprintln!("MCP server error: {e}");
+                std::process::exit(1);
+            }
+        });
+        return;
+    }
+
+    // ── LSP server mode ─────────────────────────────────────────────────
+    #[cfg(feature = "lsp")]
+    if cli.lsp {
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        rt.block_on(async {
+            if let Err(e) = nu_plugin_topology::lsp::serve_stdio().await {
+                eprintln!("LSP server error: {e}");
+                std::process::exit(1);
+            }
+        });
+        return;
+    }
+
+    // ── Normal subcommand dispatch ──────────────────────────────────────
+    let command = cli.command.unwrap_or_else(|| {
+        eprintln!("No subcommand provided. Run `topology --help` for usage.");
+        std::process::exit(1);
+    });
+
+    match command {
         Commands::Fingerprint { field, weighted } => cmd_fingerprint(&field, weighted),
-        Commands::Sample { size, strategy, field, seed } => {
-            cmd_sample(size, &strategy, field.as_deref(), seed)
-        }
+        Commands::Sample {
+            size,
+            strategy,
+            field,
+            seed,
+        } => cmd_sample(size, &strategy, field.as_deref(), seed),
         Commands::Analyze { field } => cmd_analyze(field.as_deref()),
-        Commands::Classify { field, taxonomy: tax, clusters, sample, threshold, seed } => {
-            cmd_classify(&field, tax.as_deref(), clusters, sample, threshold, seed)
-        }
+        Commands::Classify {
+            field,
+            taxonomy: tax,
+            clusters,
+            sample,
+            threshold,
+            seed,
+        } => cmd_classify(&field, tax.as_deref(), clusters, sample, threshold, seed),
         Commands::Tags { field, count } => cmd_tags(&field, count),
-        Commands::Dedup { field, url_field, strategy, threshold } => {
-            cmd_dedup(&field, &url_field, &strategy, threshold)
-        }
+        Commands::Dedup {
+            field,
+            url_field,
+            strategy,
+            threshold,
+        } => cmd_dedup(&field, &url_field, &strategy, threshold),
         Commands::Similarity { a, b, metric, all } => cmd_similarity(&a, &b, &metric, all),
         Commands::NormalizeUrl { url } => cmd_normalize_url(&url),
     }
@@ -136,7 +195,9 @@ fn main() {
 
 fn read_stdin_json() -> Vec<Value> {
     let mut buf = String::new();
-    io::stdin().read_to_string(&mut buf).expect("failed to read stdin");
+    io::stdin()
+        .read_to_string(&mut buf)
+        .expect("failed to read stdin");
     let parsed: Value = serde_json::from_str(&buf).expect("invalid JSON on stdin");
     match parsed {
         Value::Array(arr) => arr,
@@ -180,7 +241,10 @@ fn cmd_fingerprint(field: &str, weighted: bool) {
         .zip(fingerprints)
         .map(|(mut row, fp)| {
             if let Some(obj) = row.as_object_mut() {
-                obj.insert("_fingerprint".into(), Value::String(simhash::fingerprint_to_hex(fp)));
+                obj.insert(
+                    "_fingerprint".into(),
+                    Value::String(simhash::fingerprint_to_hex(fp)),
+                );
             }
             row
         })
@@ -214,14 +278,22 @@ fn cmd_sample(size: usize, strategy: &str, field: Option<&str>, seed: u64) {
             let mut strata: HashMap<String, Vec<usize>> = HashMap::new();
             for (i, row) in rows.iter().enumerate() {
                 let key = get_text(row, field_name);
-                let key = if key.is_empty() { "unknown".into() } else { key };
+                let key = if key.is_empty() {
+                    "unknown".into()
+                } else {
+                    key
+                };
                 strata.entry(key).or_default().push(i);
             }
             sampling::stratified_sample(&strata, size, seed)
         }
     };
 
-    let sampled: Vec<&Value> = indices.iter().filter(|&&i| i < total).map(|&i| &rows[i]).collect();
+    let sampled: Vec<&Value> = indices
+        .iter()
+        .filter(|&&i| i < total)
+        .map(|&i| &rows[i])
+        .collect();
     println!("{}", serde_json::to_string_pretty(&sampled).unwrap());
 }
 
@@ -278,10 +350,14 @@ fn cmd_analyze(field: Option<&str>) {
         }
 
         let non_null = total - null_count;
-        if min_len == usize::MAX { min_len = 0; }
+        if min_len == usize::MAX {
+            min_len = 0;
+        }
 
         let mut freq: HashMap<&str, usize> = HashMap::new();
-        for v in &values { *freq.entry(v.as_str()).or_insert(0) += 1; }
+        for v in &values {
+            *freq.entry(v.as_str()).or_insert(0) += 1;
+        }
         let mut freq_vec: Vec<(&str, usize)> = freq.into_iter().collect();
         freq_vec.sort_by(|a, b| b.1.cmp(&a.1));
         freq_vec.truncate(5);
@@ -301,9 +377,19 @@ fn cmd_analyze(field: Option<&str>) {
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }
 
-fn cmd_classify(field: &str, taxonomy_path: Option<&str>, clusters: usize, sample_size: usize, threshold: f64, seed: u64) {
+fn cmd_classify(
+    field: &str,
+    taxonomy_path: Option<&str>,
+    clusters: usize,
+    sample_size: usize,
+    threshold: f64,
+    seed: u64,
+) {
     let rows = read_stdin_json();
-    if rows.is_empty() { println!("[]"); return; }
+    if rows.is_empty() {
+        println!("[]");
+        return;
+    }
 
     let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
 
@@ -345,11 +431,19 @@ fn cmd_classify(field: &str, taxonomy_path: Option<&str>, clusters: usize, sampl
 
 fn cmd_tags(field: &str, count: usize) {
     let rows = read_stdin_json();
-    if rows.is_empty() { println!("[]"); return; }
+    if rows.is_empty() {
+        println!("[]");
+        return;
+    }
 
     let mut corpus = tfidf::Corpus::new();
-    let token_lists: Vec<Vec<String>> = rows.iter().map(|r| tokenizer::tokenize(&get_text(r, field))).collect();
-    for tokens in &token_lists { corpus.add_document(tokens); }
+    let token_lists: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| tokenizer::tokenize(&get_text(r, field)))
+        .collect();
+    for tokens in &token_lists {
+        corpus.add_document(tokens);
+    }
 
     let output: Vec<Value> = rows
         .into_iter()
@@ -369,7 +463,10 @@ fn cmd_tags(field: &str, count: usize) {
 
 fn cmd_dedup(field: &str, url_field: &str, strategy: &str, threshold: u32) {
     let rows = read_stdin_json();
-    if rows.is_empty() { println!("[]"); return; }
+    if rows.is_empty() {
+        println!("[]");
+        return;
+    }
     let n = rows.len();
 
     // URL dedup
@@ -388,11 +485,17 @@ fn cmd_dedup(field: &str, url_field: &str, strategy: &str, threshold: u32) {
     let mut content_pairs: HashSet<(usize, usize)> = HashSet::new();
     if strategy == "fuzzy" || strategy == "combined" {
         let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
-        let token_lists: Vec<Vec<String>> = texts.par_iter().map(|t| tokenizer::tokenize(t)).collect();
-        let fingerprints: Vec<u64> = token_lists.par_iter().map(|t| simhash::simhash_uniform(t)).collect();
+        let token_lists: Vec<Vec<String>> =
+            texts.par_iter().map(|t| tokenizer::tokenize(t)).collect();
+        let fingerprints: Vec<u64> = token_lists
+            .par_iter()
+            .map(|t| simhash::simhash_uniform(t))
+            .collect();
 
         let mut lsh_index = lsh::SimHashLshIndex::default_64();
-        for (i, &fp) in fingerprints.iter().enumerate() { lsh_index.insert(i, fp); }
+        for (i, &fp) in fingerprints.iter().enumerate() {
+            lsh_index.insert(i, fp);
+        }
 
         for (i, j) in lsh_index.candidate_pairs() {
             if simhash::hamming_distance(fingerprints[i], fingerprints[j]) <= threshold {
@@ -404,20 +507,48 @@ fn cmd_dedup(field: &str, url_field: &str, strategy: &str, threshold: u32) {
     // Union-find
     let mut parent: Vec<usize> = (0..n).collect();
     let find = |parent: &mut Vec<usize>, mut x: usize| -> usize {
-        while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x]; }
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
         x
     };
     let union = |parent: &mut Vec<usize>, a: usize, b: usize| {
-        let ra = { let mut x = a; while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x]; } x };
-        let rb = { let mut x = b; while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x]; } x };
-        if ra != rb { parent[rb] = ra; }
+        let ra = {
+            let mut x = a;
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        };
+        let rb = {
+            let mut x = b;
+            while parent[x] != x {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+            x
+        };
+        if ra != rb {
+            parent[rb] = ra;
+        }
     };
 
-    for members in url_groups.values() { for i in 1..members.len() { union(&mut parent, members[0], members[i]); } }
-    for &(i, j) in &content_pairs { union(&mut parent, i, j); }
+    for members in url_groups.values() {
+        for i in 1..members.len() {
+            union(&mut parent, members[0], members[i]);
+        }
+    }
+    for &(i, j) in &content_pairs {
+        union(&mut parent, i, j);
+    }
 
     let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
-    for i in 0..n { let root = find(&mut parent, i); groups.entry(root).or_default().push(i); }
+    for i in 0..n {
+        let root = find(&mut parent, i);
+        groups.entry(root).or_default().push(i);
+    }
 
     let mut group_ids = vec![0usize; n];
     let mut is_primary = vec![true; n];
@@ -455,16 +586,26 @@ fn cmd_similarity(a: &str, b: &str, metric_name: &str, all: bool) {
             let score = string_distance::similarity(a, b, metric);
             results.insert((*name).into(), serde_json::json!(score));
         }
-        println!("{}", serde_json::to_string_pretty(&Value::Object(results)).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&Value::Object(results)).unwrap()
+        );
     } else {
         let metric = string_distance::Metric::from_str(metric_name).unwrap_or_else(|| {
-            eprintln!("Unknown metric '{metric_name}'. Use: {}", string_distance::Metric::all_names().join(", "));
+            eprintln!(
+                "Unknown metric '{metric_name}'. Use: {}",
+                string_distance::Metric::all_names().join(", ")
+            );
             std::process::exit(1);
         });
         let score = string_distance::similarity(a, b, metric);
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "a": a, "b": b, "metric": metric_name, "similarity": score
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "a": a, "b": b, "metric": metric_name, "similarity": score
+            }))
+            .unwrap()
+        );
     }
 }
 
@@ -472,9 +613,13 @@ fn cmd_normalize_url(url: &str) {
     match url_normalize::normalize(url) {
         Some(normalized) => {
             let canonical = url_normalize::canonical_key(url).unwrap_or_default();
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "original": url, "normalized": normalized, "canonical_key": canonical
-            })).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "original": url, "normalized": normalized, "canonical_key": canonical
+                }))
+                .unwrap()
+            );
         }
         None => {
             eprintln!("Could not parse URL: {url}");

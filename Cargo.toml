@@ -24,6 +24,8 @@ bench = false
 default = ["plugin"]
 plugin = ["dep:nu-plugin", "dep:nu-protocol"]
 cli = ["dep:clap"]
+mcp = ["cli", "dep:rmcp", "dep:tokio", "dep:schemars"]
+lsp = ["cli", "dep:tower-lsp", "dep:tokio", "dep:schemars"]
 
 [dependencies]
 # Nushell plugin (optional — only for nu_plugin_topology binary)
@@ -32,6 +34,26 @@ nu-protocol = { version = "0.110.0", features = ["plugin"], optional = true }
 
 # CLI (optional — only for topology binary)
 clap = { version = "4.5", features = ["derive"], optional = true }
+
+# MCP server (optional — only for topology --mcp)
+rmcp = { version = "0.16", features = [
+  "server",
+  "transport-io",
+  "macros",
+], optional = true }
+
+# LSP server (optional — only for topology --lsp)
+tower-lsp = { version = "0.20", optional = true }
+
+# Shared async runtime for MCP + LSP
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "io-std",
+], optional = true }
+
+# JSON Schema generation for MCP tool parameters
+schemars = { version = "1", optional = true }
 
 # Core (always included)
 unicode-segmentation = "1.12"

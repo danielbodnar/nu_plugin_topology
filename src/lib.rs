@@ -3,6 +3,12 @@ pub mod algo;
 #[cfg(feature = "plugin")]
 pub mod commands;
 
+#[cfg(feature = "mcp")]
+pub mod mcp;
+
+#[cfg(feature = "lsp")]
+pub mod lsp;
+
 #[cfg(feature = "plugin")]
 use nu_plugin::{Plugin, PluginCommand};
 
