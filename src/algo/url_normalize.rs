@@ -85,6 +85,18 @@ pub fn canonical_key(raw: &str) -> Option<String> {
     Some(stripped.to_string())
 }
 
+/// Convert a string to a URL-safe slug (lowercase, alphanumeric, hyphens).
+pub fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<&str>>()
+        .join("-")
+}
+
 fn is_tracking_param(key: &str) -> bool {
     let lower = key.to_lowercase();
     lower.starts_with("utm_")
@@ -220,5 +232,20 @@ mod tests {
         assert!(!is_tracking_param("id"));
         assert!(!is_tracking_param("page"));
         assert!(!is_tracking_param("q"));
+    }
+
+    #[test]
+    fn slugify_basic() {
+        assert_eq!(slugify("Web Dev"), "web-dev");
+        assert_eq!(slugify("AI & ML"), "ai-ml");
+        assert_eq!(slugify("  spaces  "), "spaces");
+        assert_eq!(slugify("Hello World!"), "hello-world");
+        assert_eq!(slugify("rust/systems"), "rust-systems");
+    }
+
+    #[test]
+    fn slugify_empty() {
+        assert_eq!(slugify(""), "");
+        assert_eq!(slugify("---"), "");
     }
 }

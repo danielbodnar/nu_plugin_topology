@@ -4,6 +4,7 @@ use nu_protocol::{
     SyntaxShape, Type, Value,
 };
 
+use crate::algo::url_normalize::slugify;
 use crate::TopologyPlugin;
 
 use super::util;
@@ -142,15 +143,4 @@ impl PluginCommand for Organize {
 
         Ok(ListStream::new(results.into_iter(), head, Signals::empty()).into())
     }
-}
-
-fn slugify(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<&str>>()
-        .join("-")
 }

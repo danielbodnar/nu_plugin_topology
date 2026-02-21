@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use nu_plugin_topology::algo::{
-    clustering, discover, lsh, sampling, simhash, string_distance, taxonomy, tfidf, tokenizer,
+    clustering, discover, lsh, nmf, sampling, simhash, string_distance, taxonomy, tfidf, tokenizer,
     url_normalize,
 };
 use rayon::prelude::*;
@@ -127,6 +127,54 @@ enum Commands {
         /// URL to normalize
         url: String,
     },
+    /// Auto-generate a taxonomy from content using hierarchical clustering
+    Generate {
+        /// JSON field containing text
+        #[arg(short, long, default_value = "content")]
+        field: String,
+        /// Number of clusters / taxonomy depth
+        #[arg(short = 'k', long, default_value_t = 10)]
+        depth: usize,
+        /// Linkage method: ward, complete, average, single
+        #[arg(short, long, default_value = "ward")]
+        linkage: String,
+        /// Number of top terms per cluster label
+        #[arg(long, default_value_t = 5)]
+        top_terms: usize,
+    },
+    /// Discover topics using NMF (Non-negative Matrix Factorization)
+    Topics {
+        /// JSON field containing text
+        #[arg(short, long, default_value = "content")]
+        field: String,
+        /// Number of topics to discover
+        #[arg(short = 'k', long, default_value_t = 5)]
+        topics: usize,
+        /// Number of top terms per topic
+        #[arg(short = 'n', long, default_value_t = 10)]
+        terms: usize,
+        /// NMF iterations
+        #[arg(long, default_value_t = 200)]
+        iterations: usize,
+        /// Max vocabulary size
+        #[arg(long, default_value_t = 5000)]
+        vocab: usize,
+    },
+    /// Generate output paths and structure from classified items
+    Organize {
+        /// Output format: folders, flat, nested
+        #[arg(long, default_value = "folders")]
+        format: String,
+        /// Base output directory path
+        #[arg(short, long, default_value = "./organized")]
+        output_dir: String,
+        /// Field containing category
+        #[arg(long, default_value = "_category")]
+        category_field: String,
+        /// Field to use for filename
+        #[arg(long, default_value = "id")]
+        name_field: String,
+    },
 }
 
 fn main() {
@@ -190,6 +238,25 @@ fn main() {
         } => cmd_dedup(&field, &url_field, &strategy, threshold),
         Commands::Similarity { a, b, metric, all } => cmd_similarity(&a, &b, &metric, all),
         Commands::NormalizeUrl { url } => cmd_normalize_url(&url),
+        Commands::Generate {
+            field,
+            depth,
+            linkage,
+            top_terms,
+        } => cmd_generate(&field, depth, &linkage, top_terms),
+        Commands::Topics {
+            field,
+            topics,
+            terms,
+            iterations,
+            vocab,
+        } => cmd_topics(&field, topics, terms, iterations, vocab),
+        Commands::Organize {
+            format,
+            output_dir,
+            category_field,
+            name_field,
+        } => cmd_organize(&format, &output_dir, &category_field, &name_field),
     }
 }
 
@@ -626,4 +693,213 @@ fn cmd_normalize_url(url: &str) {
             std::process::exit(1);
         }
     }
+}
+
+fn cmd_generate(field: &str, depth: usize, linkage_str: &str, top_n: usize) {
+    let rows = read_stdin_json();
+    let n = rows.len();
+    if n < 2 {
+        eprintln!("Need at least 2 items to generate a taxonomy");
+        std::process::exit(1);
+    }
+
+    let linkage = clustering::Linkage::from_str(linkage_str).unwrap_or_else(|| {
+        eprintln!("Unknown linkage '{linkage_str}'. Use: ward, complete, average, single");
+        std::process::exit(1);
+    });
+
+    let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
+    let token_lists: Vec<Vec<String>> = texts.iter().map(|t| tokenizer::tokenize(t)).collect();
+
+    let mut corpus = tfidf::Corpus::new();
+    for tokens in &token_lists {
+        corpus.add_document(tokens);
+    }
+
+    let vectors: Vec<HashMap<String, f64>> = (0..n).map(|i| corpus.tfidf_vector(i)).collect();
+    let distances = clustering::cosine_distance_matrix(&vectors);
+    let k = depth.min(n);
+    let dendrogram = clustering::hac(&distances, n, linkage);
+    let labels = clustering::cut_tree(&dendrogram, k);
+
+    let actual_k = labels.iter().max().map(|m| m + 1).unwrap_or(0);
+    let mut categories: Vec<Value> = Vec::with_capacity(actual_k);
+
+    for cluster_idx in 0..actual_k {
+        let member_indices: Vec<usize> = labels
+            .iter()
+            .enumerate()
+            .filter(|(_, &l)| l == cluster_idx)
+            .map(|(i, _)| i)
+            .collect();
+
+        if member_indices.is_empty() {
+            continue;
+        }
+
+        let mut merged: HashMap<String, f64> = HashMap::new();
+        for &i in &member_indices {
+            for (term, weight) in &vectors[i] {
+                *merged.entry(term.clone()).or_insert(0.0) += weight;
+            }
+        }
+
+        let mut sorted_terms: Vec<(String, f64)> = merged.into_iter().collect();
+        sorted_terms
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sorted_terms.truncate(top_n);
+
+        let label = sorted_terms
+            .iter()
+            .take(3)
+            .map(|(t, _)| t.as_str())
+            .collect::<Vec<&str>>()
+            .join(", ");
+
+        let keywords: Vec<Value> = sorted_terms
+            .iter()
+            .map(|(t, w)| serde_json::json!({"term": t, "weight": w}))
+            .collect();
+
+        let members: Vec<Value> = member_indices.iter().map(|&i| serde_json::json!(i)).collect();
+
+        categories.push(serde_json::json!({
+            "id": cluster_idx,
+            "label": label,
+            "size": member_indices.len(),
+            "keywords": keywords,
+            "members": members,
+        }));
+    }
+
+    let output = serde_json::json!({
+        "name": "generated",
+        "num_clusters": actual_k,
+        "num_items": n,
+        "linkage": linkage_str,
+        "categories": categories,
+    });
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+fn cmd_topics(field: &str, k: usize, top_n: usize, max_iter: usize, vocab_limit: usize) {
+    let rows = read_stdin_json();
+    if rows.is_empty() {
+        eprintln!("Need at least 1 item for topic modeling");
+        std::process::exit(1);
+    }
+
+    let texts: Vec<String> = rows.iter().map(|r| get_text(r, field)).collect();
+    let token_lists: Vec<Vec<String>> = texts.iter().map(|t| tokenizer::tokenize(t)).collect();
+
+    let mut corpus = tfidf::Corpus::new();
+    for tokens in &token_lists {
+        corpus.add_document(tokens);
+    }
+
+    let vectors: Vec<HashMap<String, f64>> = (0..rows.len())
+        .map(|i| corpus.tfidf_vector(i))
+        .collect();
+
+    let result = nmf::nmf(&vectors, k, max_iter, vocab_limit);
+    let dominant = result.dominant_topics();
+
+    let topics: Vec<Value> = (0..k)
+        .map(|t| {
+            let top = result.top_terms(t, top_n);
+            let terms: Vec<Value> = top
+                .iter()
+                .map(|(term, weight)| serde_json::json!({"term": term, "weight": weight}))
+                .collect();
+
+            let members: Vec<Value> = dominant
+                .iter()
+                .enumerate()
+                .filter(|(_, &topic)| topic == t)
+                .map(|(i, _)| serde_json::json!(i))
+                .collect();
+
+            let label = top
+                .iter()
+                .take(3)
+                .map(|(t, _)| t.as_str())
+                .collect::<Vec<&str>>()
+                .join(", ");
+
+            serde_json::json!({
+                "id": t,
+                "label": label,
+                "size": members.len(),
+                "terms": terms,
+                "members": members,
+            })
+        })
+        .collect();
+
+    let assignments: Vec<Value> = dominant
+        .iter()
+        .enumerate()
+        .map(|(i, &topic)| serde_json::json!({"item": i, "topic": topic}))
+        .collect();
+
+    let output = serde_json::json!({
+        "num_topics": k,
+        "num_items": rows.len(),
+        "topics": topics,
+        "assignments": assignments,
+    });
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+fn cmd_organize(format: &str, output_dir: &str, category_field: &str, name_field: &str) {
+    let rows = read_stdin_json();
+    if rows.is_empty() {
+        println!("[]");
+        return;
+    }
+
+    let output: Vec<Value> = rows
+        .into_iter()
+        .map(|mut row| {
+            let category = row
+                .get(category_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("Uncategorized")
+                .to_string();
+
+            let name = row
+                .get(name_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let slug_cat = url_normalize::slugify(&category);
+            let slug_name = url_normalize::slugify(&name);
+
+            let output_path = match format {
+                "flat" => format!("{output_dir}/{slug_cat}--{slug_name}"),
+                "nested" => {
+                    let hierarchy = row
+                        .get("_hierarchy")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or(&category)
+                        .to_string();
+                    let path = hierarchy
+                        .split(" > ")
+                        .map(|p| url_normalize::slugify(p))
+                        .collect::<Vec<String>>()
+                        .join("/");
+                    format!("{output_dir}/{path}/{slug_name}")
+                }
+                _ => format!("{output_dir}/{slug_cat}/{slug_name}"),
+            };
+
+            if let Some(obj) = row.as_object_mut() {
+                obj.insert("_output_path".into(), Value::String(output_path));
+            }
+            row
+        })
+        .collect();
+
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }
