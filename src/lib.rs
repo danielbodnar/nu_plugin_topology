@@ -1,4 +1,5 @@
 pub mod algo;
+pub mod ops;
 
 #[cfg(feature = "plugin")]
 pub mod commands;
@@ -33,6 +34,7 @@ impl Plugin for TopologyPlugin {
             Box::new(commands::Dedup),
             Box::new(commands::Organize),
             Box::new(commands::Similarity),
+            Box::new(commands::NormalizeUrl),
         ]
     }
 }
