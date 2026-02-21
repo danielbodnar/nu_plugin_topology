@@ -33,7 +33,7 @@ impl PluginCommand for Classify {
             .named(
                 "taxonomy",
                 SyntaxShape::String,
-                "Taxonomy JSON string (default: built-in 17-category taxonomy)",
+                "Path to taxonomy JSON file (default: XDG override or built-in)",
                 Some('t'),
             )
             .named(
@@ -67,12 +67,12 @@ impl PluginCommand for Classify {
         let field: String = call
             .get_flag::<String>("field")?
             .unwrap_or_else(|| "content".into());
-        let taxonomy_json: Option<String> = call.get_flag("taxonomy")?;
+        let taxonomy_path: Option<String> = call.get_flag("taxonomy")?;
         let threshold: f64 = call.get_flag::<f64>("threshold")?.unwrap_or(0.5);
         let head = call.head;
 
-        let tax = match taxonomy_json {
-            Some(json) => taxonomy::parse_taxonomy(&json)
+        let tax = match taxonomy_path {
+            Some(path) => taxonomy::load_taxonomy(&path)
                 .map_err(|e| LabeledError::new(e))?,
             None => taxonomy::default_taxonomy(),
         };

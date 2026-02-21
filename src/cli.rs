@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use nu_plugin_topology::algo::{
-    lsh, minhash, sampling, simhash, string_distance, taxonomy, tfidf, tokenizer, url_normalize,
+    lsh, sampling, simhash, string_distance, taxonomy, tfidf, tokenizer, url_normalize,
 };
 use rayon::prelude::*;
 use serde_json::Value;
